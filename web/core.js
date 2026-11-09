@@ -131,5 +131,92 @@
     return { ok: true };
   }
 
-  return { parseMoney, fmtMoney, money, DEFAULT_CATS, emptyState, migrate, monthKey, nextKey, daysIn, calc, accountBalances, canDeleteAccount };
+  // ---- Разбор таблиц ----
+  const pad = n => String(n).padStart(2, '0');
+  const localDate = (d = new Date()) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  const MONTH_WORDS = ['январ', 'феврал', 'март', 'апрел', 'май', 'июн', 'июл', 'август', 'сентябр', 'октябр', 'ноябр', 'декабр'];
+  const CAT_RULES = {
+    in: [[/зп|зарплат|аванс/, 'Зарплата'], [/пенс/, 'Пенсия'], [/подраб|фриланс/, 'Подработка']],
+    out: [[/маме|семь|ребен/, 'Семья'], [/еда|обед|продукт|кафе|ресторан|доставк/, 'Еда'],
+          [/такси|бензин|метро|проезд|парков/, 'Транспорт'], [/квартир|аренд|ипотек|коммунал|жкх|ремонт/, 'Жильё'],
+          [/мак|айфон|iphone|телефон|пылесос|техник|ноут|компьют|apple|наушник/, 'Техника'],
+          [/одежд|обув|куртк|джинс/, 'Одежда'], [/впн|подписк|netflix|spotify|icloud|vpn/, 'Подписки'],
+          [/аптек|врач|лекар|стоматолог|анализ/, 'Здоровье'], [/steam|игр|кино|развлеч|фигурк/, 'Развлечения']]
+  };
+  function guessCat(type, title) {
+    const t = title.toLowerCase();
+    const hit = CAT_RULES[type].find(([re]) => re.test(t));
+    return hit ? hit[1] : 'Другое';
+  }
+  // Ячейка → копейки (0, если это не сумма)
+  const cellMoney = v => { const k = parseMoney(v); return k === null ? 0 : k; };
+  function parseDate(v) {
+    if (v instanceof Date) return localDate(v);
+    if (typeof v === 'number' && v > 20000 && v < 80000) {
+      const d = new Date(Math.round((v - 25569) * 86400 * 1000));
+      return localDate(new Date(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
+    }
+    const m = String(v ?? '').match(/(\d{1,2})[.\/-](\d{1,2})[.\/-](\d{4})/);
+    return m ? `${m[3]}-${pad(m[2])}-${pad(m[1])}` : null;
+  }
+  function monthFromCell(text) {
+    const m = text.trim().toLowerCase().match(/^([а-яё]+)\s*(\d{4})?$/);
+    if (!m) return null;
+    const idx = MONTH_WORDS.findIndex(w => m[1].startsWith(w));
+    return idx < 0 ? null : { num: idx + 1, year: m[2] ? Number(m[2]) : null };
+  }
+  function mapHeader(cells) {
+    const low = cells.map(c => c.toLowerCase());
+    const find = (...keys) => low.findIndex(c => keys.some(k => c.includes(k)));
+    return {
+      incAmt: find('доход'), incTitle: find('откуда', 'источник'),
+      expAmt: find('расход'), expTitle: find('на что', 'назначен', 'описан'),
+      date: find('дата')
+    };
+  }
+  // Первый лист таблицы: строки-месяцы, шапка «доход/расход», строки записей.
+  // opts: { cur: месяц по умолчанию «ГГГГ-ММ», account: id счёта, seq: стартовый номер записей }
+  function parseSheet(rows, opts) {
+    const items = [], months = new Set();
+    let ctx = null, map = null, lastDay = 1, opening = null;
+    const defYear = Number(opts.cur.slice(0, 4));
+    let seq = opts.seq;
+    for (const row of rows) {
+      if (!Array.isArray(row)) continue;
+      const cells = row.map(v => v instanceof Date ? '' : String(v ?? '').trim());
+      const filled = cells.filter(Boolean);
+      if (!filled.length) continue;
+      const low = cells.map(c => c.toLowerCase());
+      if (low.some(c => c.includes('доход')) && low.some(c => c.includes('расход'))) { map = mapHeader(cells); continue; }
+      const mh = filled.length <= 2 ? monthFromCell(filled[0]) : null;
+      if (mh) {
+        const year = mh.year || (ctx ? Number(ctx.slice(0, 4)) : defYear);
+        ctx = `${year}-${pad(mh.num)}`;
+        lastDay = 1;
+        const num = row.find(v => typeof v === 'number');
+        if (opening === null && num !== undefined && items.length === 0) opening = cellMoney(num);
+        continue;
+      }
+      if (!map) continue;
+      const sides = [
+        { type: 'in', amount: cellMoney(row[map.incAmt]), col: map.incTitle },
+        { type: 'out', amount: cellMoney(row[map.expAmt]), col: map.expTitle }
+      ];
+      for (const s of sides) {
+        if (!(s.amount > 0)) continue;
+        const title = (s.col >= 0 ? String(row[s.col] ?? '').trim() : '') || (s.type === 'in' ? 'Доход' : 'Расход');
+        let date = map.date >= 0 ? parseDate(row[map.date]) : null;
+        const tm = title.match(/(\d{1,2})[.\-](\d{1,2})(?!\d)/);
+        if (!date && tm && ctx && Number(tm[2]) === Number(ctx.slice(5, 7))) date = `${ctx}-${pad(tm[1])}`;
+        if (!date) date = `${ctx || opts.cur}-${pad(lastDay)}`;
+        else lastDay = Number(date.slice(8, 10));
+        months.add(monthKey(date));
+        seq++;
+        items.push({ id: seq, t: seq, type: s.type, date, title, cat: guessCat(s.type, title), amount: s.amount, account: opts.account });
+      }
+    }
+    return { items, months: [...months].sort(), opening };
+  }
+
+  return { parseMoney, fmtMoney, money, DEFAULT_CATS, emptyState, migrate, monthKey, nextKey, daysIn, calc, accountBalances, canDeleteAccount, parseSheet, guessCat, localDate };
 });

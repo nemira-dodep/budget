@@ -173,3 +173,38 @@ test('nextKey и daysIn', () => {
   assert.equal(Core.daysIn('2026-02'), 28);
   assert.equal(Core.daysIn('2028-02'), 29);
 });
+
+// ---- Разбор таблиц ----
+const sheet = [
+  ['НОЯБРЬ 2026', 800],
+  ['дата', 'доход', 'откуда', 'расход', 'на что'],
+  ['05.11.2026', 1000.5, 'ЗП', '', ''],
+  ['', '', '', '1 234,56', 'Продукты']
+];
+test('parseSheet: суммы в копейках, счёт и номера', () => {
+  const r = Core.parseSheet(sheet, { cur: '2026-11', account: 3, seq: 100 });
+  assert.equal(r.items.length, 2);
+  assert.deepEqual(r.items.map(i => i.amount), [100050, 123456]);
+  assert.deepEqual(r.items.map(i => i.account), [3, 3]);
+  assert.deepEqual(r.items.map(i => i.id), [101, 102]);
+  assert.equal(r.opening, 80000);
+  assert.deepEqual(r.months, ['2026-11']);
+});
+test('parseSheet: строка без даты берёт день предыдущей', () => {
+  const r = Core.parseSheet(sheet, { cur: '2026-11', account: 1, seq: 0 });
+  assert.equal(r.items[1].date, '2026-11-05');
+});
+test('guessCat: подбор категории', () => {
+  assert.equal(Core.guessCat('out', 'Такси домой'), 'Транспорт');
+  assert.equal(Core.guessCat('in', 'ЗП за ноябрь'), 'Зарплата');
+  assert.equal(Core.guessCat('out', 'что-то'), 'Другое');
+});
+test('parseSheet: без колонок дохода и расхода записей нет', () => {
+  const r = Core.parseSheet([['а', 'б'], ['1', '2']], { cur: '2026-11', account: 1, seq: 0 });
+  assert.deepEqual(r.items, []);
+});
+test('parseSheet: ячейка с копейками как число', () => {
+  const r = Core.parseSheet([['дата', 'доход', 'расход'], ['01.11.2026', '', 19.99]], { cur: '2026-11', account: 1, seq: 0 });
+  assert.equal(r.items[0].amount, 1999);
+  assert.equal(r.items[0].type, 'out');
+});

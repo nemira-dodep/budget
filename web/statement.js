@@ -76,10 +76,12 @@
     if (expenseLabel) { const v = valueNear(expenseLabel); if (v) out.declared.expense = toKop(v.str.match(/\d[\d  ]*[.,]\d{2}/)[0]); }
 
     // Колонки по заголовкам таблицы
-    const find = test => items.find(i => test(i.str));
+    // Заголовки ищем на одной строке с «Описание», чтобы не путать со словами выше таблицы («Номер договора»)
+    const anchor = items.find(i => i.str.startsWith('Описание'));
+    const find = test => anchor && items.find(i => i.page === anchor.page && Math.abs(i.y - anchor.y) <= 3 && test(i.str));
     const heads = [
       find(s => s.startsWith('Дата и время')), find(s => s === 'Дата'), find(s => s.startsWith('Сумма в валюте')),
-      find(s => s.startsWith('Сумма операции')), find(s => s.startsWith('Описание')), find(s => s.startsWith('Номер'))
+      find(s => s.startsWith('Сумма операции')), anchor, find(s => s.startsWith('Номер'))
     ];
     if (heads.some(h => !h)) { out.warnings.push(NOT_FOUND); return out; }
     const xs = heads.map(h => h.x);

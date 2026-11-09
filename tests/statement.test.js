@@ -128,3 +128,10 @@ test('parse: нет таблицы или операций', () => {
   assert.ok(parse([...header()]).warnings.some(w => /Не нашёл операций/.test(w)));
   assert.deepEqual(parse([]).ops, []);
 });
+
+test('parse: слово «Номер» в тексте над таблицей не принимается за заголовок колонки', () => {
+  const above = [it('Номер договора: 0000000000', 40, 900, 1), it('Номер лицевого счета: 00000000000000000000', 40, 890, 1)];
+  const r = parse([...above, ...header(), ...op({ y: 770 })]);
+  assert.equal(r.ops[0].desc, 'Оплата в SHOP1 City RUS');
+  assert.equal(r.ops[0].card, '1234');
+});

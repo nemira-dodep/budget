@@ -135,3 +135,26 @@ test('parse: слово «Номер» в тексте над таблицей �
   assert.equal(r.ops[0].desc, 'Оплата в SHOP1 City RUS');
   assert.equal(r.ops[0].card, '1234');
 });
+
+// ---- Исправления по итогам ревью ----
+test('canRemember: правило можно запомнить только для магазинов', () => {
+  assert.equal(Statement.canRemember('Оплата в MAGNIT MM City RUS'), true);
+  assert.equal(Statement.canRemember('Внешний перевод по номеру телефона +7···1111'), false);
+  assert.equal(Statement.canRemember('Пополнение. Система быстрых платежей'), false);
+  assert.equal(Statement.canRemember('Оплата в 12345'), false);
+});
+test('parse: небольшой сдвиг базовой линии внутри строки не уводит текст в другую операцию', () => {
+  const shifted = [
+    it('09.11.2026', X.dt, 700), it('16:39', X.dt, 690),
+    it('-156.00', X.amtOp, 700), it('₽', X.amtOp + 30, 700.4), it('-156.00', X.amtCard, 700), it('₽', X.amtCard + 30, 700.4),
+    it('Оплата в', X.desc, 700), it('SHOP', X.desc + 40, 700.3), it('1234', X.card, 690)];
+  const r = parse([...header(), ...op({ y: 770 }), ...shifted]);
+  assert.equal(r.ops.length, 2);
+  assert.equal(r.ops[0].desc, 'Оплата в SHOP1 City RUS');
+  assert.equal(r.ops[1].desc, 'Оплата в SHOP');
+  assert.equal(r.ops[1].amount, -15600);
+});
+test('parse: операция не в рублях хранит рублёвую сумму из колонки карты', () => {
+  const r = parse([...header(), ...op({ y: 770, amtOp: '-10.00 $', amtCard: '-900.00 ₽', lines: ['Оплата в USSHOP'] })]);
+  assert.equal(r.skipped[0].amount, -90000);
+});

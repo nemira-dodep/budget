@@ -787,14 +787,23 @@ function statementPlan() {
   const picked = pb.rows.filter(r => r.include).map(r => bankItem(r, acc));
   const split = Core.splitNewItems(S.items, picked);
   const d = pb.declared;
-  let after = null, diff = 0;
+  let after = null, diff = 0, skippedNet = 0, fix = 0;
   if (d.balance !== undefined && d.balanceDate) {
-    after = Core.balanceOn({ ...S, items: [...S.items, ...split.fresh] }, d.balanceDate);
-    diff = d.balance - after;
+    // Остаток счёта на дату справки: по загружаемым операциям и по всем операциям справки
+    const everyRow = Core.splitNewItems(S.items, pb.rows.map(r => bankItem(r, acc))).fresh;
+    const ghosts = pb.skipped.filter(s => s.amount !== undefined)
+      .map(s => ({ date: s.date, type: s.amount > 0 ? 'in' : 'out', amount: Math.abs(s.amount), account: acc }));
+    const balance = list => Core.accountBalanceOn({ ...S, items: [...S.items, ...list] }, d.balanceDate, acc);
+    after = balance(split.fresh);
+    const afterAll = balance([...everyRow, ...ghosts]);
+    diff = d.balance - after;           // разница с справкой после загрузки
+    skippedNet = afterAll - after;      // сколько из неё даёт то, что не загружается (переводы между своими, снятые галочки)
+    fix = d.balance - afterAll;         // правка стартового остатка счёта: с ней все операции справки дают остаток из справки
   }
   const minDate = pb.rows.reduce((m, r) => r.op.date < m ? r.op.date : m, '9999-12-31');
-  const canAdjust = diff !== 0 && !S.items.some(i => i.date < minDate);
-  return { picked, ...split, after, diff, canAdjust };
+  const canAdjust = fix !== 0 && !S.items.some(i => i.date < minDate);
+  if (after !== null && pb.adjust && canAdjust) { after += fix; diff -= fix; }   // показываем остаток уже с подогнанным стартом
+  return { picked, ...split, after, diff, skippedNet, fix, canAdjust };
 }
 function showStatementPreview() {
   const pb = pendingImport.bank;
@@ -810,15 +819,16 @@ function showStatementPreview() {
       <td>${esc(r.op.date.slice(8))}.${esc(r.op.date.slice(5, 7))}</td>
       <td class="desc">${esc(r.op.desc)}</td>
       <td><select data-rc="${i}" aria-label="Категория">${catOptions(r)}</select>
-        ${r.changed ? `<label class="chip"><input type="checkbox" data-rr="${i}"${r.remember ? ' checked' : ''}> запомнить</label>` : ''}</td>
+        ${r.changed && Statement.canRemember(r.op.desc) ? `<label class="chip"><input type="checkbox" data-rr="${i}"${r.remember ? ' checked' : ''}> запомнить для магазина</label>` : ''}</td>
       <td class="num ${r.type}">${r.type === 'in' ? '+' : '−'}${fmt(Math.abs(r.op.amount))}</td></tr>`).join('');
   const bits = [`Найдено операций: ${pb.rows.length + pb.skipped.length}`, `будет загружено: ${plan.fresh.length}`];
   if (plan.skipped) bits.push(`уже есть: ${plan.skipped}`);
   if (ownCount) bits.push(`переводов между своими: ${ownCount}${pb.rows.some(r => r.own && r.include) ? '' : ' (пропущено)'}`);
   if (pb.skipped.length) bits.push(`не загружено: ${pb.skipped.length} (${esc(pb.skipped[0].reason)})`);
   const rec = plan.after === null ? '' : `<p class="imp-rec">В справке: ${money(pb.declared.balance)}. У вас после загрузки: ${money(plan.after)}.` +
-    (plan.diff ? ` Разница: ${money(plan.diff)}.` : ' Сходится.') + `</p>` +
-    (plan.canAdjust ? `<label class="chip"><input type="checkbox" id="impAdjust"${pb.adjust ? ' checked' : ''}> Подогнать стартовый остаток под справку (изменится на ${money(plan.diff)})</label>` : '');
+    (plan.diff ? ` Разница: ${money(plan.diff)}.` : ' Сходится.') +
+    (plan.diff && plan.skippedNet ? ` Из неё ${money(plan.skippedNet)} это операции, которые вы не загружаете (переводы между своими, снятые галочки).` : '') + `</p>` +
+    (plan.canAdjust ? `<label class="chip"><input type="checkbox" id="impAdjust"${pb.adjust ? ' checked' : ''}> Подогнать стартовый остаток счёта «${esc(S.accounts[0].name)}» под справку (изменится на ${money(plan.fix)})</label>` : '');
   $('#impBox').innerHTML = `
     ${pb.warnings.map(w => `<p class="imp-warn">${esc(w)}</p>`).join('')}
     <p class="imp-sum">${bits.join(', ')}.</p>
@@ -834,7 +844,7 @@ $('#impBox').addEventListener('change', e => {
   if (!pb) return;
   const t = e.target;
   if (t.dataset.ri !== undefined) pb.rows[Number(t.dataset.ri)].include = t.checked;
-  else if (t.dataset.rc !== undefined) { const r = pb.rows[Number(t.dataset.rc)]; r.cat = t.value; r.changed = true; r.remember = true; }
+  else if (t.dataset.rc !== undefined) { const r = pb.rows[Number(t.dataset.rc)]; r.cat = t.value; r.changed = true; r.remember = Statement.canRemember(r.op.desc); }
   else if (t.dataset.rr !== undefined) pb.rows[Number(t.dataset.rr)].remember = t.checked;
   else if (t.id === 'impOwn') pb.rows.forEach(r => { if (r.own) r.include = t.checked; });
   else if (t.id === 'impAdjust') pb.adjust = t.checked;
@@ -849,8 +859,8 @@ function doStatementImport() {
     S.items.push({ ...it, id: now + k, t: now + k });
     ensureMonth(monthKey(it.date));
   });
-  pb.rows.forEach(r => { if (r.changed && r.remember) S.rules[Statement.shopKey(r.op.desc)] = r.cat; });
-  if (pb.adjust && plan.canAdjust) Core.setOpeningTotal(S, S.accounts.reduce((a, x) => a + x.opening, 0) + plan.diff);
+  pb.rows.forEach(r => { if (r.changed && r.remember && Statement.canRemember(r.op.desc)) S.rules[Statement.shopKey(r.op.desc)] = r.cat; });
+  if (pb.adjust && plan.canAdjust) S.accounts[0].opening += plan.fix;
   if (plan.fresh.length) S.cur = monthKey(plan.fresh.map(i => i.date).sort().pop());
   save(); render();
   $('#impDlg').close();

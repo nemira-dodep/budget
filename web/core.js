@@ -166,6 +166,17 @@
     return { fresh, skipped };
   }
 
+  // Остаток одного счёта на конец указанного дня (с учётом переводов)
+  function accountBalanceOn(S, date, id) {
+    const acc = S.accounts.find(a => a.id === id);
+    return S.items.filter(i => i.date <= date).reduce((a, i) => {
+      if (i.type === 'in' && i.account === id) return a + i.amount;
+      if (i.type === 'out' && i.account === id) return a - i.amount;
+      if (i.type === 'transfer') return a - (i.account === id ? i.amount : 0) + (i.toAccount === id ? i.amount : 0);
+      return a;
+    }, acc ? acc.opening : 0);
+  }
+
   // Общий остаток на конец указанного дня (переводы между счетами не влияют)
   function balanceOn(S, date) {
     return S.items.filter(i => i.date <= date).reduce(
@@ -276,5 +287,5 @@
     return { items, months: [...months].sort(), opening };
   }
 
-  return { parseMoney, fmtMoney, money, DEFAULT_CATS, emptyState, migrate, monthKey, nextKey, daysIn, calc, accountBalances, canDeleteAccount, setOpeningTotal, splitNewItems, balanceOn, parseSheet, guessCat, localDate, applyEdit };
+  return { parseMoney, fmtMoney, money, DEFAULT_CATS, emptyState, migrate, monthKey, nextKey, daysIn, calc, accountBalances, canDeleteAccount, setOpeningTotal, splitNewItems, balanceOn, accountBalanceOn, parseSheet, guessCat, localDate, applyEdit };
 });

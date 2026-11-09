@@ -326,3 +326,12 @@ test('migrate: поле rules по умолчанию и сохраняется'
   assert.deepEqual(Core.migrate({ opening: 0, months: ['2026-11'], items: [], rules: { magnit: 'Еда' } }).rules, { magnit: 'Еда' });
   assert.deepEqual(Core.emptyState('2026-11').rules, {});
 });
+
+test('accountBalanceOn: остаток одного счёта на дату с учётом переводов', () => {
+  const s = base();
+  assert.equal(Core.accountBalanceOn(s, '2026-11-02', 1), 100000);
+  assert.equal(Core.accountBalanceOn(s, '2026-11-03', 1), 130000);
+  assert.equal(Core.accountBalanceOn(s, '2026-11-10', 1), 110000);
+  assert.equal(Core.accountBalanceOn(s, '2026-11-10', 2), 60000);
+  assert.equal(Core.accountBalanceOn(s, '2026-11-04', 2), 50000);
+});

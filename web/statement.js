@@ -16,8 +16,8 @@
   // ---- Ключ магазина для запоминания правил ----
   function shopKey(desc) {
     const clean = String(desc).toLowerCase().replace(/[^a-zа-яё&*.\-\s]/g, '');
-    const m = clean.match(/^\s*оплата в\s+(.+)/);
-    const tokens = (m ? m[1] : clean).split(/\s+/).filter(Boolean);
+    const m = clean.match(/^\s*оплата в(?:\s+(.*))?$/);
+    const tokens = (m ? (m[1] || '') : clean).split(/\s+/).filter(Boolean);
     return m ? (tokens[0] || '') : tokens.slice(0, 2).join(' ');
   }
 
@@ -104,10 +104,21 @@
       .filter(i => i.y <= cut[i.page].top && i.y > cut[i.page].bottom)
       .sort((a, b) => a.page - b.page || b.y - a.y || a.x - b.x);
 
+    // Строки собираем с допуском по высоте (небольшой сдвиг базовой линии не должен менять порядок)
+    const flat = [];
+    let line = [], lineY = 0, linePage = 0;
+    const flush = () => { line.sort((a, b) => a.x - b.x); flat.push(...line); line = []; };
+    for (const it of body) {
+      if (line.length && (it.page !== linePage || lineY - it.y > 2)) flush();
+      if (!line.length) { lineY = it.y; linePage = it.page; }
+      line.push(it);
+    }
+    flush();
+
     // Раскладка по операциям
     const rows = [];
     let cur = null;
-    for (const it of body) {
+    for (const it of flat) {
       const col = colOf(it.x);
       const dm = col === 0 && it.str.trim().match(DATE);
       if (dm) { cur = { date: isoDate(dm), time: null, cols: [[], [], [], [], [], []] }; rows.push(cur); continue; }
@@ -124,8 +135,9 @@
       const opTok = tokens[0], cardTok = tokens[1] || tokens[0];
       const signed = t => (t[1] === '+' ? 1 : -1) * toKop(t[2]);
       if (opTok[3] !== '₽' || cardTok[3] !== '₽') {
-        out.skipped.push({ date: r.date, desc, reason: 'операция в другой валюте' });
-        if (cardTok[3] === '₽') all.push(signed(cardTok));
+        const sk = { date: r.date, desc, reason: 'операция в другой валюте' };
+        if (cardTok[3] === '₽') { sk.amount = signed(cardTok); all.push(sk.amount); }
+        out.skipped.push(sk);
         continue;
       }
       const amount = signed(cardTok);
@@ -144,5 +156,10 @@
     return out;
   }
 
-  return { maskDigits, shopKey, categorize, parseTbankItems };
+  // Правило «для магазина» можно запомнить только для оплат в магазинах: ключ перевода или пополнения слишком широкий
+  function canRemember(desc) {
+    return /^\s*оплата в\s+\S/i.test(desc) && shopKey(desc).replace(/[^a-zа-яё]/g, '').length >= 2;
+  }
+
+  return { maskDigits, shopKey, categorize, canRemember, parseTbankItems };
 });

@@ -15,6 +15,7 @@
     if (typeof input === 'number' && !Number.isFinite(input)) return null;
     const s = String(input).replace(/[\s  ]/g, '').replace(',', '.');
     if (/e/i.test(s)) {
+      if (typeof input !== 'number') return null;   // «1e3» из текстового поля это ошибка ввода
       const x = Number(s);
       return Number.isFinite(x) ? Math.round(x * 100) : null;
     }
@@ -42,7 +43,12 @@
     out: ['Еда', 'Транспорт', 'Жильё', 'Техника', 'Одежда', 'Подписки', 'Здоровье', 'Семья', 'Развлечения', 'Другое']
   };
   const monthKey = date => date.slice(0, 7);
-  const kop = rub => Math.round((Number(rub) || 0) * 100);
+  const kop = rub => { const k = parseMoney(rub); return k === null ? 0 : k; };
+  const intOf = v => {
+    const n = typeof v === 'number' ? v : Number(v);
+    if (!Number.isFinite(n)) throw new Error('bad data');
+    return n;
+  };
 
   function emptyState(key) {
     return {
@@ -73,6 +79,10 @@
     s.limits = s.limits || {};
     s.goals = s.goals || [];
     s.reminders = s.reminders || [];
+    s.accounts.forEach(a => { a.opening = intOf(a.opening ?? 0); });
+    s.items.forEach(i => { i.amount = intOf(i.amount); });
+    Object.keys(s.limits).forEach(k => { s.limits[k] = intOf(s.limits[k]); });
+    s.goals.forEach(g => { g.target = intOf(g.target); g.saved = intOf(g.saved ?? 0); });
     const cat = t => (s.cats && Array.isArray(s.cats[t]) && s.cats[t].length) ? s.cats[t] : DEFAULT_CATS[t];
     s.cats = { in: [...cat('in')], out: [...cat('out')] };
     const first = s.accounts[0].id;
@@ -122,6 +132,25 @@
       else if (i.type === 'transfer') { add(i.account, -i.amount); add(i.toAccount, i.amount); }
     });
     return b;
+  }
+
+  // Меняет общий стартовый остаток: разница уходит в первый счёт
+  function setOpeningTotal(S, total) {
+    S.accounts[0].opening += total - openingTotal(S);
+  }
+
+  // Новые записи для импорта: дубли (дата, тип, описание, сумма) пропускаются, в том числе внутри самого импорта
+  function splitNewItems(existing, incoming) {
+    const key = i => `${i.date}|${i.type}|${i.title}|${i.amount}`;
+    const seen = new Set(existing.map(key));
+    const fresh = [];
+    let skipped = 0;
+    incoming.forEach(i => {
+      const k = key(i);
+      if (seen.has(k)) skipped++;
+      else { seen.add(k); fresh.push(i); }
+    });
+    return { fresh, skipped };
   }
 
   function canDeleteAccount(S, id) {
@@ -228,5 +257,5 @@
     return { items, months: [...months].sort(), opening };
   }
 
-  return { parseMoney, fmtMoney, money, DEFAULT_CATS, emptyState, migrate, monthKey, nextKey, daysIn, calc, accountBalances, canDeleteAccount, parseSheet, guessCat, localDate, applyEdit };
+  return { parseMoney, fmtMoney, money, DEFAULT_CATS, emptyState, migrate, monthKey, nextKey, daysIn, calc, accountBalances, canDeleteAccount, setOpeningTotal, splitNewItems, parseSheet, guessCat, localDate, applyEdit };
 });

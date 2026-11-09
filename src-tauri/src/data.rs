@@ -20,6 +20,19 @@ fn sibling(path: &Path, suffix: &str) -> PathBuf {
     path.with_file_name(name)
 }
 
+/// Свободное имя для повреждённого файла: `.broken`, затем `.broken.1`, `.broken.2` и так далее,
+/// чтобы прежний повреждённый файл никогда не затирался.
+fn free_broken_name(path: &Path) -> PathBuf {
+    let first = sibling(path, ".broken");
+    if !first.exists() {
+        return first;
+    }
+    (1..)
+        .map(|n| sibling(path, &format!(".broken.{}", n)))
+        .find(|p| !p.exists())
+        .expect("бесконечный перебор имён")
+}
+
 /// Пишет файл целиком или не пишет совсем: временный файл рядом, затем переименование.
 pub fn atomic_write(path: &Path, text: &str) -> io::Result<()> {
     let tmp = sibling(path, ".tmp");
@@ -48,9 +61,7 @@ pub fn quarantine(path: &Path) -> io::Result<()> {
     if !path.exists() {
         return Ok(());
     }
-    let broken = sibling(path, ".broken");
-    let _ = fs::remove_file(&broken);
-    fs::rename(path, &broken)
+    fs::rename(path, free_broken_name(path))
 }
 
 /// Как `load_data_file`, но если файла нет, а рядом остался `.broken` или есть рабочая копия,
@@ -77,9 +88,7 @@ pub fn load_data_file(path: &Path) -> io::Result<Loaded> {
     match valid {
         Some(text) => Ok(Loaded::Ok(text)),
         None => {
-            let broken = sibling(path, ".broken");
-            let _ = fs::remove_file(&broken);
-            fs::rename(path, &broken)?;
+            fs::rename(path, free_broken_name(path))?;
             Ok(Loaded::Broken)
         }
     }
@@ -90,6 +99,11 @@ pub fn load_data_file(path: &Path) -> io::Result<Loaded> {
 const BACKUP_PREFIX: &str = "budget-";
 const BACKUP_SUFFIX: &str = ".json";
 
+/// Имя копии за день: `budget-ГГГГ-ММ-ДД.json`.
+pub fn backup_name(date: chrono::NaiveDate) -> String {
+    format!("{}{}{}", BACKUP_PREFIX, date.format("%Y-%m-%d"), BACKUP_SUFFIX)
+}
+
 fn backup_date(name: &str) -> Option<chrono::NaiveDate> {
     let core = name.strip_prefix(BACKUP_PREFIX)?.strip_suffix(BACKUP_SUFFIX)?;
     chrono::NaiveDate::parse_from_str(core, "%Y-%m-%d").ok()
@@ -98,7 +112,7 @@ fn backup_date(name: &str) -> Option<chrono::NaiveDate> {
 /// Копия `data.json` за сегодня; `true`, если создана. Если копия за день есть, ничего не делает.
 pub fn ensure_daily_backup(data: &Path, dir: &Path, today: chrono::NaiveDate) -> io::Result<bool> {
     fs::create_dir_all(dir)?;
-    let target = dir.join(format!("{}{}{}", BACKUP_PREFIX, today.format("%Y-%m-%d"), BACKUP_SUFFIX));
+    let target = dir.join(backup_name(today));
     if target.exists() {
         return Ok(false);
     }
@@ -145,7 +159,8 @@ pub fn save_settings(path: &Path, s: &Settings) -> io::Result<()> {
     atomic_write(path, &text)
 }
 
-fn writable_dir(dir: &Path) -> bool {
+/// Папку можно создать и писать в неё.
+pub fn writable_dir(dir: &Path) -> bool {
     if fs::create_dir_all(dir).is_err() {
         return false;
     }
@@ -167,32 +182,45 @@ pub fn effective_backup_dir(default: &Path, s: &Settings) -> (PathBuf, bool) {
 
 // ---- Восстановление ----
 
-/// Текст самой свежей копии с корректным JSON в папке (файлы не вида `budget-ГГГГ-ММ-ДД.json` пропускаются).
-pub fn latest_valid_backup(dir: &Path) -> Option<String> {
-    let mut found: Vec<(chrono::NaiveDate, PathBuf)> = fs::read_dir(dir)
-        .ok()?
-        .flatten()
-        .filter_map(|e| backup_date(&e.file_name().to_string_lossy()).map(|d| (d, e.path())))
-        .collect();
-    found.sort_by(|a, b| b.0.cmp(&a.0));
-    found.into_iter().find_map(|(_, p)| {
-        fs::read_to_string(p)
-            .ok()
-            .filter(|t| serde_json::from_str::<serde_json::Value>(t).is_ok())
-    })
+fn valid_text(path: &Path) -> Option<String> {
+    fs::read_to_string(path)
+        .ok()
+        .filter(|t| serde_json::from_str::<serde_json::Value>(t).is_ok())
 }
 
-/// Ставит `data.json` из последней рабочей копии в списке папок. Старый файл, если он есть,
-/// остаётся рядом как `data.json.broken`. Без копий возвращает ошибку и ничего не меняет.
-pub fn restore_from_backup(data: &Path, dirs: &[PathBuf]) -> Result<String, String> {
-    let text = dirs
+fn dated_backups(dir: &Path) -> Vec<(chrono::NaiveDate, PathBuf)> {
+    match fs::read_dir(dir) {
+        Ok(entries) => entries
+            .flatten()
+            .filter_map(|e| backup_date(&e.file_name().to_string_lossy()).map(|d| (d, e.path())))
+            .collect(),
+        Err(_) => Vec::new(),
+    }
+}
+
+/// Текст самой свежей копии с корректным JSON в папке (файлы не вида `budget-ГГГГ-ММ-ДД.json` пропускаются).
+pub fn latest_valid_backup(dir: &Path) -> Option<String> {
+    let mut found = dated_backups(dir);
+    found.sort_by(|a, b| b.0.cmp(&a.0));
+    found.into_iter().find_map(|(_, p)| valid_text(&p))
+}
+
+/// Ставит `data.json` из самой свежей рабочей копии среди всех папок (копии «из будущего» не берутся).
+/// Старый файл, если он есть, остаётся рядом как `data.json.broken`. Без копий возвращает ошибку
+/// и ничего не меняет.
+pub fn restore_from_backup(data: &Path, dirs: &[PathBuf], today: chrono::NaiveDate) -> Result<String, String> {
+    let mut all: Vec<(chrono::NaiveDate, PathBuf)> = dirs
         .iter()
-        .find_map(|d| latest_valid_backup(d))
+        .flat_map(|d| dated_backups(d))
+        .filter(|(date, _)| *date <= today)
+        .collect();
+    all.sort_by(|a, b| b.0.cmp(&a.0));
+    let text = all
+        .into_iter()
+        .find_map(|(_, p)| valid_text(&p))
         .ok_or_else(|| "Копий не найдено".to_string())?;
     if data.exists() {
-        let broken = sibling(data, ".broken");
-        let _ = fs::remove_file(&broken);
-        fs::rename(data, &broken).map_err(|e| e.to_string())?;
+        fs::rename(data, free_broken_name(data)).map_err(|e| e.to_string())?;
     }
     atomic_write(data, &text).map_err(|e| e.to_string())?;
     Ok(text)
@@ -240,9 +268,11 @@ mod tests {
         fs::set_permissions(d.path(), fs::Permissions::from_mode(0o555)).unwrap();
         let res = atomic_write(&p, "{\"new\":true}");
         fs::set_permissions(d.path(), fs::Permissions::from_mode(0o755)).unwrap();
-        if res.is_err() {
-            assert_eq!(fs::read_to_string(&p).unwrap(), "{\"old\":true}");
+        if res.is_ok() {
+            eprintln!("пропуск: права на папку не действуют (запуск от root)");
+            return;
         }
+        assert_eq!(fs::read_to_string(&p).unwrap(), "{\"old\":true}");
     }
 
     #[test]
@@ -376,6 +406,10 @@ mod backup_tests {
 #[cfg(test)]
 mod restore_tests {
     use super::*;
+
+    fn day0() -> chrono::NaiveDate {
+        chrono::NaiveDate::from_ymd_opt(2026, 11, 9).unwrap()
+    }
     use std::fs;
     use tempfile::tempdir;
 
@@ -404,7 +438,7 @@ mod restore_tests {
         let bk = d.path().join("backups");
         fs::create_dir_all(&bk).unwrap();
         fs::write(bk.join("budget-2026-11-05.json"), "{\"v\":5}").unwrap();
-        assert_eq!(restore_from_backup(&data, &[bk]).unwrap(), "{\"v\":5}");
+        assert_eq!(restore_from_backup(&data, &[bk], day0()).unwrap(), "{\"v\":5}");
         assert_eq!(fs::read_to_string(&data).unwrap(), "{\"v\":5}");
         assert_eq!(fs::read_to_string(d.path().join("data.json.broken")).unwrap(), "{\"bad\":");
     }
@@ -414,7 +448,7 @@ mod restore_tests {
         let d = tempdir().unwrap();
         let data = d.path().join("data.json");
         fs::write(&data, "{\"keep\":1}").unwrap();
-        assert!(restore_from_backup(&data, &[d.path().join("none")]).is_err());
+        assert!(restore_from_backup(&data, &[d.path().join("none")], day0()).is_err());
         assert_eq!(fs::read_to_string(&data).unwrap(), "{\"keep\":1}");
     }
 }
@@ -488,5 +522,68 @@ mod review_fix_tests {
         fs::write(&p, "{\"items\":[],\"months\":[]}").unwrap();
         let r = load_or_recover(&p, &[]).unwrap();
         assert!(matches!(r, Loaded::Ok(_)));
+    }
+}
+
+#[cfg(test)]
+mod deferred_fix_tests {
+    use super::*;
+    use std::fs;
+    use tempfile::tempdir;
+
+    fn day0() -> chrono::NaiveDate {
+        chrono::NaiveDate::from_ymd_opt(2026, 11, 9).unwrap()
+    }
+
+    #[test]
+    fn second_quarantine_keeps_first_broken_file() {
+        let d = tempdir().unwrap();
+        let p = d.path().join("data.json");
+        fs::write(&p, "first").unwrap();
+        quarantine(&p).unwrap();
+        fs::write(&p, "second").unwrap();
+        quarantine(&p).unwrap();
+        assert_eq!(fs::read_to_string(d.path().join("data.json.broken")).unwrap(), "first");
+        assert_eq!(fs::read_to_string(d.path().join("data.json.broken.1")).unwrap(), "second");
+    }
+
+    #[test]
+    fn broken_load_after_earlier_broken_keeps_both() {
+        let d = tempdir().unwrap();
+        let p = d.path().join("data.json");
+        fs::write(d.path().join("data.json.broken"), "old").unwrap();
+        fs::write(&p, "{\"a\":").unwrap();
+        assert!(matches!(load_data_file(&p).unwrap(), Loaded::Broken));
+        assert_eq!(fs::read_to_string(d.path().join("data.json.broken")).unwrap(), "old");
+        assert_eq!(fs::read_to_string(d.path().join("data.json.broken.1")).unwrap(), "{\"a\":");
+    }
+
+    #[test]
+    fn restore_picks_newest_across_folders() {
+        let d = tempdir().unwrap();
+        let a = d.path().join("a");
+        let b = d.path().join("b");
+        fs::create_dir_all(&a).unwrap();
+        fs::create_dir_all(&b).unwrap();
+        fs::write(a.join("budget-2026-11-01.json"), "{\"v\":1}").unwrap();
+        fs::write(b.join("budget-2026-11-05.json"), "{\"v\":5}").unwrap();
+        let data = d.path().join("data.json");
+        assert_eq!(restore_from_backup(&data, &[a, b], day0()).unwrap(), "{\"v\":5}");
+    }
+
+    #[test]
+    fn restore_ignores_future_dated_backups() {
+        let d = tempdir().unwrap();
+        let a = d.path().join("a");
+        fs::create_dir_all(&a).unwrap();
+        fs::write(a.join("budget-2026-11-05.json"), "{\"v\":5}").unwrap();
+        fs::write(a.join("budget-2099-01-01.json"), "{\"v\":99}").unwrap();
+        let data = d.path().join("data.json");
+        assert_eq!(restore_from_backup(&data, &[a], day0()).unwrap(), "{\"v\":5}");
+    }
+
+    #[test]
+    fn backup_name_has_fixed_format() {
+        assert_eq!(backup_name(day0()), "budget-2026-11-09.json");
     }
 }

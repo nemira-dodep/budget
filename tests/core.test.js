@@ -243,3 +243,45 @@ test('applyEdit: «+ Своя категория» берёт первую ка�
   const r = Core.applyEdit(it, { type: 'in', amount: '5', title: 'x', cat: '__new__', date: '2026-11-05', note: '', rep: false }, Core.DEFAULT_CATS);
   assert.equal(r.item.cat, 'Зарплата');
 });
+
+// ---- Исправления отложенных замечаний ----
+test('parseMoney: запись с экспонентой из текста отвергается', () => {
+  assert.equal(Core.parseMoney('1e3'), null);
+  assert.equal(Core.parseMoney('2E2'), null);
+  assert.equal(Core.parseMoney(2e2), 20000); // число из ячейки таблицы по-прежнему принимается
+});
+test('migrate: сумма v1 строкой с пробелами разбирается, а не обнуляется', () => {
+  const s = Core.migrate({ opening: '1 000,50', months: ['2026-11'], items: [
+    { id: 1, t: 1, type: 'in', date: '2026-11-01', title: 'a', cat: 'Другое', amount: '1 500' }] });
+  assert.equal(s.items[0].amount, 150000);
+  assert.equal(s.accounts[0].opening, 100050);
+});
+test('migrate: числа v2 строками приводятся к числам, мусор отвергается', () => {
+  const v2 = { version: 2, accounts: [{ id: 1, name: 'A', opening: '100' }], months: ['2026-11'], items: [
+    { id: 1, t: 1, type: 'out', date: '2026-11-01', title: 'a', cat: 'Еда', amount: '500', account: 1 }] };
+  const s = Core.migrate(v2);
+  assert.equal(s.items[0].amount, 500);
+  assert.equal(s.accounts[0].opening, 100);
+  assert.equal(Core.calc(s)[0].exp, 500);
+  v2.items[0].amount = 'abc';
+  assert.throws(() => Core.migrate(v2), /bad data/);
+});
+test('setOpeningTotal: общий стартовый остаток при нескольких счетах', () => {
+  const s = mk([]);
+  Core.setOpeningTotal(s, 300000);
+  assert.equal(s.accounts.reduce((a, x) => a + x.opening, 0), 300000);
+  assert.equal(s.accounts[1].opening, 50000);
+  assert.equal(s.accounts[0].opening, 250000);
+});
+test('splitNewItems: дубли пропускаются, в том числе внутри самого импорта', () => {
+  const have = [{ date: '2026-11-01', type: 'out', title: 'Еда', amount: 100 }];
+  const inc = [
+    { date: '2026-11-01', type: 'out', title: 'Еда', amount: 100 },
+    { date: '2026-11-02', type: 'out', title: 'Еда', amount: 100 },
+    { date: '2026-11-02', type: 'out', title: 'Еда', amount: 100 },
+    { date: '2026-11-01', type: 'in', title: 'Еда', amount: 100 }
+  ];
+  const r = Core.splitNewItems(have, inc);
+  assert.equal(r.fresh.length, 2);
+  assert.equal(r.skipped, 2);
+});

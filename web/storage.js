@@ -11,10 +11,14 @@ const Storage = (() => {
   let timer = null, pending = null, chain = Promise.resolve();
   const api = { onError: () => {} };
 
+  // Данные v2, а если они повреждены, старые v1: сначала один ключ, потом другой
   const fromLocal = () => {
-    const raw = ls.get(KEY) || ls.get(LEGACY);
-    if (!raw) return null;
-    try { return Core.migrate(JSON.parse(raw)); } catch (e) { return null; }
+    for (const key of [KEY, LEGACY]) {
+      const raw = ls.get(key);
+      if (!raw) continue;
+      try { return Core.migrate(JSON.parse(raw)); } catch (e) { /* пробуем следующий ключ */ }
+    }
+    return null;
   };
 
   // → { state } | { broken: true } | { newer: true }

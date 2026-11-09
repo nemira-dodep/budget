@@ -4,6 +4,7 @@
 mod data;
 
 use std::collections::HashSet;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -96,8 +97,14 @@ fn backup_dirs(app: &tauri::AppHandle) -> Result<(std::path::PathBuf, bool), Str
 /// Копия за сегодня (если её ещё нет) и очистка старых.
 fn daily_backup(app: &tauri::AppHandle) {
     let Ok(base) = app_dir(app) else { return };
-    let Ok((dir, _)) = backup_dirs(app) else { return };
     let today = chrono::Local::now().date_naive();
+    // Быстрый выход без проверки записи в папку: копия за сегодня уже лежит
+    let settings = data::load_settings(&base.join("settings.json"));
+    let quick = settings.backup_dir.as_ref().map(std::path::PathBuf::from).unwrap_or_else(|| base.join("backups"));
+    if quick.join(data::backup_name(today)).exists() {
+        return;
+    }
+    let Ok((dir, _)) = backup_dirs(app) else { return };
     if data::ensure_daily_backup(&base.join("data.json"), &dir, today).unwrap_or(false) {
         let _ = data::prune_backups(&dir, today, 30);
     }
@@ -134,7 +141,7 @@ fn restore_latest_backup(app: tauri::AppHandle) -> Result<String, String> {
     let (dir, _) = backup_dirs(&app)?;
     let mut dirs = vec![dir];
     dirs.push(base.join("backups"));
-    data::restore_from_backup(&base.join("data.json"), &dirs)
+    data::restore_from_backup(&base.join("data.json"), &dirs, chrono::Local::now().date_naive())
 }
 
 #[tauri::command]
@@ -148,6 +155,9 @@ async fn choose_backup_dir(app: tauri::AppHandle) -> Result<Option<String>, Stri
     let Some(folder) = rfd::AsyncFileDialog::new().pick_folder().await else {
         return Ok(None);
     };
+    if !data::writable_dir(folder.path()) {
+        return Err("В эту папку нельзя записывать. Выберите другую".to_string());
+    }
     let dir = folder.path().to_string_lossy().into_owned();
     let path = app_dir(&app)?.join("settings.json");
     let settings = data::Settings { backup_dir: Some(dir.clone()) };
@@ -183,6 +193,9 @@ fn quit_app(app: tauri::AppHandle) {
     app.exit(0);
 }
 
+/// Первый запрос на выход (Cmd+Q, «Выйти» в трее) просит интерфейс сохранить данные.
+static QUITTING: AtomicBool = AtomicBool::new(false);
+
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_notification::init())
@@ -211,15 +224,7 @@ fn main() {
                             let _ = w.set_focus();
                         }
                     }
-                    "quit" => {
-                        // Просим интерфейс сохранить данные; если он не ответил, выходим сами.
-                        let _ = app.emit("before-quit", ());
-                        let handle = app.clone();
-                        std::thread::spawn(move || {
-                            std::thread::sleep(Duration::from_millis(1500));
-                            handle.exit(0);
-                        });
-                    }
+                    "quit" => app.exit(0),
                     _ => {}
                 })
                 .build(app)?;
@@ -264,6 +269,18 @@ fn main() {
         .build(tauri::generate_context!())
         .expect("ошибка сборки приложения")
         .run(|app, event| {
+            // Выход: сначала даём интерфейсу сохранить данные, сами выходим через 1,5 с, если он не ответил
+            if let tauri::RunEvent::ExitRequested { api, .. } = &event {
+                if !QUITTING.swap(true, Ordering::SeqCst) {
+                    api.prevent_exit();
+                    let _ = app.emit("before-quit", ());
+                    let handle = app.clone();
+                    std::thread::spawn(move || {
+                        std::thread::sleep(Duration::from_millis(1500));
+                        handle.exit(0);
+                    });
+                }
+            }
             // macOS: клик по значку в Dock возвращает спрятанное окно
             #[cfg(target_os = "macos")]
             if let tauri::RunEvent::Reopen { .. } = event {

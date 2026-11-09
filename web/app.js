@@ -58,20 +58,20 @@ function ledger(m) {
   const q = ui.q.trim().toLowerCase();
   const rows = m.rows.filter(r =>
     (ui.filter === 'all' || r.type === ui.filter) &&
-    (!q || (r.title + ' ' + r.cat + ' ' + (r.note || '')).toLowerCase().includes(q)));
+    (!q || (r.title + ' ' + (r.cat || '') + ' ' + (r.note || '')).toLowerCase().includes(q)));
   if (!m.rows.length) return '<p class="empty">Пусто. Добавьте доход или расход формой выше.</p>';
   if (!rows.length) return '<p class="empty">Ничего не найдено.</p>';
   return rows.map(r => `
-    <div class="row" data-id="${r.id}">
-      <span class="date">${r.date.slice(8)}.${r.date.slice(5, 7)}</span>
-      <button class="what" type="button" data-edit="${r.id}" aria-label="Изменить: ${esc(r.title)}">
+    <div class="row" data-id="${esc(r.id)}">
+      <span class="date">${esc(r.date.slice(8))}.${esc(r.date.slice(5, 7))}</span>
+      <button class="what" type="button" data-edit="${esc(r.id)}" aria-label="Изменить: ${esc(r.title)}">
         <span class="title">${esc(r.title)}${r.rep ? ' <span class="cat">· каждый месяц</span>' : ''}</span>
-        <span class="cat">${esc(r.cat)}</span>
+        <span class="cat">${r.type === 'transfer' ? 'Перевод между счетами' : esc(r.cat || '')}</span>
         ${r.note ? `<span class="note">${esc(r.note)}</span>` : ''}
       </button>
-      <span class="amt ${r.type}">${r.type === 'in' ? '+' : '−'}${fmt(r.amount)}</span>
+      <span class="amt ${r.type}">${r.type === 'in' ? '+' : r.type === 'out' ? '−' : ''}${fmt(r.amount)}</span>
       <span class="run">${fmt(r.balance)}</span>
-      <button class="del" type="button" data-del="${r.id}" aria-label="Удалить: ${esc(r.title)}">×</button>
+      <button class="del" type="button" data-del="${esc(r.id)}" aria-label="Удалить: ${esc(r.title)}">×</button>
     </div>`).join('');
 }
 
@@ -107,8 +107,8 @@ function breakdown(m) {
           <div class="cat-top"><span>${esc(g.name)}</span><span>${fmt(g.saved)} / ${fmt(g.target)} ₽</span></div>
           <div class="bar"><i class="in" style="width:${pct.toFixed(1)}%"></i></div>
           <div class="goal-act">
-            <button class="link" type="button" data-goal-add="${g.id}">внести</button>
-            <button class="link danger" type="button" data-goal-del="${g.id}">удалить</button>
+            <button class="link" type="button" data-goal-add="${esc(g.id)}">внести</button>
+            <button class="link danger" type="button" data-goal-del="${esc(g.id)}">удалить</button>
           </div></div>`;
       }).join('')
     : '<p class="empty">Целей пока нет.</p>';
@@ -126,7 +126,7 @@ function yearView(cal) {
     <thead><tr><th>Месяц</th><th>Доходы</th><th>Расходы</th><th>Итог</th><th>Остаток</th></tr></thead>
     <tbody>${cal.map(m => {
       const net = m.inc - m.exp;
-      return `<tr data-month-go="${m.key}" tabindex="0" aria-label="Открыть ${monthName(m.key)}">
+      return `<tr data-month-go="${esc(m.key)}" tabindex="0" aria-label="Открыть ${esc(monthName(m.key))}">
         <td>${monthName(m.key)}</td>
         <td class="in">+${fmt(m.inc)}</td>
         <td class="out">−${fmt(m.exp)}<div class="mini"><i style="width:${(m.exp / maxExp * 100).toFixed(1)}%"></i></div></td>
@@ -148,7 +148,7 @@ function render() {
   const net = m.inc - m.exp;
 
   $('#months').innerHTML =
-    cal.map(x => `<button class="month-btn" type="button" data-key="${x.key}" aria-current="${x.key === m.key}">
+    cal.map(x => `<button class="month-btn" type="button" data-key="${esc(x.key)}" aria-current="${x.key === m.key}">
       <span>${monthName(x.key)}</span><small>${money(x.closing)}</small></button>`).join('') +
     `<button class="add-month" id="addMonth" type="button">+ Новый месяц</button>`;
 
@@ -348,8 +348,12 @@ document.addEventListener('click', e => {
   }
   if (hit('#editOpening') || hit('#obOpening')) {
     ask({ title: 'Стартовый остаток', text: 'Сколько денег у вас на начало первого месяца. Дальше остаток считается сам.',
-          fields: [{ name: 'v', label: 'Сумма, ₽', inputmode: 'decimal', value: plain(S.accounts[0].opening) }] })
-      .then(r => { if (r && !isNaN(num(r.v))) { S.accounts[0].opening = num(r.v); save(); render(); } });
+          fields: [{ name: 'v', label: 'Сумма, ₽', inputmode: 'decimal', value: plain(S.accounts.reduce((a, x) => a + x.opening, 0)) }] })
+      .then(r => {
+        if (!r) return;
+        if (isNaN(num(r.v))) return toast('Остаток не изменён: введите сумму, например 15000 или 15000,50');
+        Core.setOpeningTotal(S, num(r.v)); save(); render();
+      });
     return;
   }
   const seg = hit('[data-type]');
@@ -369,6 +373,7 @@ document.addEventListener('click', e => {
       .then(r => {
         if (!r) return;
         const n = num(r.v);
+        if (isNaN(n)) return toast('Лимит не изменён: введите сумму или 0, чтобы убрать лимит');
         if (n > 0) S.limits[c] = n; else delete S.limits[c];
         save(); render();
       });
@@ -505,6 +510,7 @@ const dlg = $('#dlg'), ef = $('#editForm');
 function openEdit(id) {
   const it = S.items.find(i => i.id === id);
   if (!it) return;
+  if (it.type === 'transfer') return toast('Переводы между счетами редактируются в одной из следующих версий');
   editingId = id;
   ef.type.value = it.type;
   ef.amount.value = plain(it.amount);
@@ -542,7 +548,7 @@ $('#dlgDelete').addEventListener('click', () => {
 $('#exportCsv').addEventListener('click', () => {
   const rows = [['Месяц', 'Дата', 'Тип', 'Категория', 'Описание', 'Заметка', 'Сумма', 'Остаток']];
   calc().forEach(m => m.rows.forEach(r =>
-    rows.push([m.key, r.date, r.type === 'in' ? 'Доход' : 'Расход', r.cat, r.title, r.note || '', plain(r.amount), plain(r.balance)])));
+    rows.push([m.key, r.date, r.type === 'in' ? 'Доход' : r.type === 'transfer' ? 'Перевод' : 'Расход', r.cat || '', r.title, r.note || '', plain(r.amount), plain(r.balance)])));
   const text = '﻿' + rows.map(r => r.map(v => `"${String(v).replace(/"/g, '""')}"`).join(';')).join('\r\n');
   download('budget.csv', text, 'text/csv;charset=utf-8');
 });
@@ -623,10 +629,10 @@ function remindersHTML() {
   const rows = list.length ? list.map(r => `
     <div class="rem-row">
       <div><div>${esc(r.title)}</div>
-        <div class="meta">${fmtAt(r.at)}${r.repeat === 'monthly' ? ' · каждый месяц' : ''}</div></div>
+        <div class="meta">${esc(fmtAt(r.at))}${r.repeat === 'monthly' ? ' · каждый месяц' : ''}</div></div>
       <div class="acts">
-        <button class="link" type="button" data-rem-done="${r.id}">готово</button>
-        <button class="link danger" type="button" data-rem-del="${r.id}">удалить</button>
+        <button class="link" type="button" data-rem-done="${esc(r.id)}">готово</button>
+        <button class="link danger" type="button" data-rem-del="${esc(r.id)}">удалить</button>
       </div></div>`).join('') : '<p class="empty">Напоминаний нет.</p>';
   return `<section class="widget"><h3>Напоминания</h3><p class="wh">Уведомление придёт в назначенное время.</p>${rows}
     <form class="rem-form" id="remForm" autocomplete="off">
@@ -690,8 +696,7 @@ async function handleImportFile(name, bytes) {
   try {
     if (/\.json$/i.test(name)) {
       const text = new TextDecoder().decode(bytes);
-      const s = JSON.parse(text);
-      if (!Array.isArray(s.items)) throw new Error('Это не копия бюджета.');
+      const s = Core.migrate(JSON.parse(text));   // бросает 'bad data' / 'newer version'
       pendingImport = { json: text };
       showImportPreview(`Копия бюджета: записей ${s.items.length}, месяцев ${s.months.length}. Текущие данные будут заменены.`, []);
       return;
@@ -706,12 +711,14 @@ async function handleImportFile(name, bytes) {
   } catch (err) {
     pendingImport = null;
     $('#impGo').disabled = true;
-    $('#impBox').innerHTML = `<p class="empty" style="padding:0">${esc(err.message || 'Не удалось прочитать файл')}</p>`;
+    const msg = /bad data|JSON/.test(String(err.message)) ? 'Это не копия бюджета.'
+      : /newer version/.test(String(err.message)) ? 'Копия создана более новой версией приложения. Обновите приложение.'
+      : (err.message || 'Не удалось прочитать файл');
+    $('#impBox').innerHTML = `<p class="empty" style="padding:0">${esc(msg)}</p>`;
   }
 }
 function showImportPreview(summary, items) {
-  const existing = new Set(S.items.map(i => `${i.date}|${i.type}|${i.title}|${i.amount}`));
-  const dups = items.filter(i => existing.has(`${i.date}|${i.type}|${i.title}|${i.amount}`)).length;
+  const dups = Core.splitNewItems(S.items, items).skipped;
   const inc = items.filter(i => i.type === 'in').reduce((a, i) => a + i.amount, 0);
   const out = items.filter(i => i.type === 'out').reduce((a, i) => a + i.amount, 0);
   const head = summary || `Найдено записей: ${items.length} (доходы ${money(inc)}, расходы ${money(out)}). ` +
@@ -732,18 +739,14 @@ function doImport() {
     toast('Копия восстановлена');
     return;
   }
-  const existing = new Set(S.items.map(i => `${i.date}|${i.type}|${i.title}|${i.amount}`));
+  const { fresh, skipped } = Core.splitNewItems(S.items, pendingImport.items);
   const now = Date.now();
-  let added = 0, skipped = 0;
-  pendingImport.items.forEach((it, k) => {
-    const key = `${it.date}|${it.type}|${it.title}|${it.amount}`;
-    if (existing.has(key)) { skipped++; return; }
-    existing.add(key);
+  fresh.forEach((it, k) => {
     S.items.push({ ...it, id: now + k, t: now + k });
     ensureMonth(monthKey(it.date));
-    added++;
   });
-  if (pendingImport.opening != null) S.accounts[0].opening = pendingImport.opening;
+  const added = fresh.length;
+  if (pendingImport.opening != null) Core.setOpeningTotal(S, pendingImport.opening);
   if (pendingImport.months.length) S.cur = pendingImport.months[0];
   save(); render();
   $('#impDlg').close();

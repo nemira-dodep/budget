@@ -29,7 +29,7 @@
           <summary class="ghost">Данные</summary>
           <div class="menu-pop">
             <button type="button" id="catsBtn">Категории</button>
-            <button type="button" id="importTable">Импорт из таблицы</button>
+            <button type="button" id="importTable">Импорт из файла</button>
             <button type="button" id="exportCsv">Сохранить в CSV</button>
             <button type="button" id="backup">Сохранить копию</button>
             <button type="button" id="restore">Загрузить копию</button>
@@ -148,8 +148,8 @@
 </dialog>
 
 <dialog id="impDlg" aria-labelledby="impTitle">
-  <h2 id="impTitle">Импорт таблицы</h2>
-  <p class="dlg-text">Выберите файл .xlsx, .xls, .csv или копию .json. Колонки «доход», «расход», «дата», «описание» находятся автоматически. Строки «НОЯБРЬ 2026» задают месяц.</p>
+  <h2 id="impTitle">Импорт из файла</h2>
+  <p class="dlg-text">Выберите справку Т-Банка о движении средств (.pdf), таблицу (.xlsx, .xls, .csv) или копию .json. В таблице колонки «доход», «расход», «дата», «описание» находятся автоматически, а строки «НОЯБРЬ 2026» задают месяц. Файл читается на вашем компьютере и нигде не сохраняется.</p>
   <div class="dlg-actions" style="justify-content:flex-start">
     <button type="button" class="ghost" id="impPick">Выбрать файл</button>
   </div>
@@ -159,7 +159,7 @@
     <button type="button" class="primary" id="impGo" disabled>Импортировать</button>
   </div>
 </dialog>
-<input type="file" id="impFile" accept=".xlsx,.xls,.csv,.json" hidden>
+<input type="file" id="impFile" accept=".xlsx,.xls,.csv,.json,.pdf" hidden>
 
 <dialog id="dlg" aria-labelledby="dlgTitle">
   <form id="editForm" autocomplete="off">

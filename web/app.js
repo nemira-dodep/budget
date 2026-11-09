@@ -729,6 +729,12 @@ async function handleImportFile(name, bytes) {
       showImportPreview(`Копия бюджета: записей ${s.items.length}, месяцев ${s.months.length}. Текущие данные будут заменены.`, []);
       return;
     }
+    if (/\.pdf$/i.test(name)) {
+      const st = Statement.parseTbankItems(await extractTextItems(bytes));
+      if (!st.ops.length) throw new Error(st.warnings[0] || 'Не нашёл операций. Это справка Т-Банка о движении средств?');
+      startStatementImport(st);
+      return;
+    }
     await loadXlsx();
     const wb = XLSX.read(bytes, { type: 'array', cellDates: true });
     const rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, raw: true, defval: '' });
@@ -759,7 +765,99 @@ function showImportPreview(summary, items) {
   $('#impBox').innerHTML = `<p style="margin:0">${esc(head)}</p>${table}`;
   $('#impGo').disabled = false;
 }
+// ---- Выписка банка ----
+const bankItem = (r, account) => ({
+  type: r.type, date: r.op.date, time: r.op.time, title: r.op.desc, cat: r.cat,
+  amount: Math.abs(r.op.amount), account
+});
+function startStatementImport(st) {
+  const rows = st.ops.map(op => {
+    const type = op.amount > 0 ? 'in' : 'out';
+    const c = Statement.categorize(op.desc, type, S.rules);
+    const list = S.cats[type];
+    const cat = list.includes(c.cat) ? c.cat : (list.includes('Другое') ? 'Другое' : list[0]);
+    return { op, type, cat, own: c.own, include: !c.own, remember: true, changed: false };
+  });
+  pendingImport = { bank: { rows, declared: st.declared, warnings: st.warnings, skipped: st.skipped, adjust: false } };
+  showStatementPreview();
+}
+function statementPlan() {
+  const pb = pendingImport.bank;
+  const acc = S.accounts[0].id;
+  const picked = pb.rows.filter(r => r.include).map(r => bankItem(r, acc));
+  const split = Core.splitNewItems(S.items, picked);
+  const d = pb.declared;
+  let after = null, diff = 0;
+  if (d.balance !== undefined && d.balanceDate) {
+    after = Core.balanceOn({ ...S, items: [...S.items, ...split.fresh] }, d.balanceDate);
+    diff = d.balance - after;
+  }
+  const minDate = pb.rows.reduce((m, r) => r.op.date < m ? r.op.date : m, '9999-12-31');
+  const canAdjust = diff !== 0 && !S.items.some(i => i.date < minDate);
+  return { picked, ...split, after, diff, canAdjust };
+}
+function showStatementPreview() {
+  const pb = pendingImport.bank;
+  const plan = statementPlan();
+  const ownCount = pb.rows.filter(r => r.own).length;
+  const prevScroll = $('#impBox .imp-preview')?.scrollTop || 0;
+  const catOptions = r => {
+    const list = S.cats[r.type].includes(r.cat) ? S.cats[r.type] : [...S.cats[r.type], r.cat];
+    return list.map(c => `<option${c === r.cat ? ' selected' : ''}>${esc(c)}</option>`).join('');
+  };
+  const rowsHtml = pb.rows.map((r, i) => `<tr class="${r.own ? 'own' : ''}">
+      <td><input type="checkbox" data-ri="${i}" aria-label="Загрузить"${r.include ? ' checked' : ''}></td>
+      <td>${esc(r.op.date.slice(8))}.${esc(r.op.date.slice(5, 7))}</td>
+      <td class="desc">${esc(r.op.desc)}</td>
+      <td><select data-rc="${i}" aria-label="Категория">${catOptions(r)}</select>
+        ${r.changed ? `<label class="chip"><input type="checkbox" data-rr="${i}"${r.remember ? ' checked' : ''}> запомнить</label>` : ''}</td>
+      <td class="num ${r.type}">${r.type === 'in' ? '+' : '−'}${fmt(Math.abs(r.op.amount))}</td></tr>`).join('');
+  const bits = [`Найдено операций: ${pb.rows.length + pb.skipped.length}`, `будет загружено: ${plan.fresh.length}`];
+  if (plan.skipped) bits.push(`уже есть: ${plan.skipped}`);
+  if (ownCount) bits.push(`переводов между своими: ${ownCount}${pb.rows.some(r => r.own && r.include) ? '' : ' (пропущено)'}`);
+  if (pb.skipped.length) bits.push(`не загружено: ${pb.skipped.length} (${esc(pb.skipped[0].reason)})`);
+  const rec = plan.after === null ? '' : `<p class="imp-rec">В справке: ${money(pb.declared.balance)}. У вас после загрузки: ${money(plan.after)}.` +
+    (plan.diff ? ` Разница: ${money(plan.diff)}.` : ' Сходится.') + `</p>` +
+    (plan.canAdjust ? `<label class="chip"><input type="checkbox" id="impAdjust"${pb.adjust ? ' checked' : ''}> Подогнать стартовый остаток под справку (изменится на ${money(plan.diff)})</label>` : '');
+  $('#impBox').innerHTML = `
+    ${pb.warnings.map(w => `<p class="imp-warn">${esc(w)}</p>`).join('')}
+    <p class="imp-sum">${bits.join(', ')}.</p>
+    ${ownCount ? `<label class="chip"><input type="checkbox" id="impOwn"${pb.rows.some(r => r.own && r.include) ? ' checked' : ''}> Загрузить и переводы между своими как расходы и доходы</label>` : ''}
+    ${rec}
+    <div class="imp-preview imp-bank"><table>${rowsHtml}</table></div>`;
+  $('#impBox .imp-preview').scrollTop = prevScroll;
+  $('#impGo').disabled = !(plan.fresh.length || (pb.adjust && plan.canAdjust));
+}
+// Изменения в окне выписки
+$('#impBox').addEventListener('change', e => {
+  const pb = pendingImport && pendingImport.bank;
+  if (!pb) return;
+  const t = e.target;
+  if (t.dataset.ri !== undefined) pb.rows[Number(t.dataset.ri)].include = t.checked;
+  else if (t.dataset.rc !== undefined) { const r = pb.rows[Number(t.dataset.rc)]; r.cat = t.value; r.changed = true; r.remember = true; }
+  else if (t.dataset.rr !== undefined) pb.rows[Number(t.dataset.rr)].remember = t.checked;
+  else if (t.id === 'impOwn') pb.rows.forEach(r => { if (r.own) r.include = t.checked; });
+  else if (t.id === 'impAdjust') pb.adjust = t.checked;
+  else return;
+  showStatementPreview();
+});
+function doStatementImport() {
+  const pb = pendingImport.bank;
+  const plan = statementPlan();
+  const now = Date.now();
+  plan.fresh.forEach((it, k) => {
+    S.items.push({ ...it, id: now + k, t: now + k });
+    ensureMonth(monthKey(it.date));
+  });
+  pb.rows.forEach(r => { if (r.changed && r.remember) S.rules[Statement.shopKey(r.op.desc)] = r.cat; });
+  if (pb.adjust && plan.canAdjust) Core.setOpeningTotal(S, S.accounts.reduce((a, x) => a + x.opening, 0) + plan.diff);
+  if (plan.fresh.length) S.cur = monthKey(plan.fresh.map(i => i.date).sort().pop());
+  save(); render();
+  $('#impDlg').close();
+  toast(`Загружено: ${plan.fresh.length}` + (plan.skipped ? `, пропущено дублей: ${plan.skipped}` : ''));
+}
 function doImport() {
+  if (pendingImport && pendingImport.bank) return doStatementImport();
   if (!pendingImport) return;
   if (pendingImport.json) {
     importText(pendingImport.json);

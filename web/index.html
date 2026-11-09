@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Бюджет</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="app">
+  <aside>
+    <div class="brand">Бюджет</div>
+    <nav class="months" id="months" aria-label="Месяцы"></nav>
+    <div class="aside-foot">
+      <button class="ghost" id="theme" type="button">Светлая тема</button>
+      <p class="hint"><kbd>N</kbd> новая запись · <kbd>⌘K</kbd> поиск · <kbd>←</kbd><kbd>→</kbd> месяцы</p>
+    </div>
+  </aside>
+
+  <main>
+    <header class="top">
+      <h1 id="title"></h1>
+      <div class="tools">
+        <div class="seg" role="group" aria-label="Режим">
+          <button type="button" data-view="month" aria-pressed="true">Месяц</button>
+          <button type="button" data-view="year" aria-pressed="false">Все месяцы</button>
+        </div>
+        <input type="search" id="q" placeholder="Поиск (⌘K)" aria-label="Поиск по записям">
+        <select id="filter" aria-label="Тип записей">
+          <option value="all">Все</option>
+          <option value="in">Доходы</option>
+          <option value="out">Расходы</option>
+        </select>
+        <button class="ghost" id="importTable" type="button">Импорт таблицы</button>
+        <button class="ghost" id="exportCsv" type="button">CSV</button>
+        <button class="ghost" id="backup" type="button">Копия</button>
+        <button class="ghost" id="restore" type="button">Восстановить</button>
+        <input type="file" id="file" accept="application/json" hidden>
+      </div>
+    </header>
+
+    <div id="monthView">
+      <section class="hero" id="hero" aria-live="polite"></section>
+      <section class="curve" id="curve" aria-label="График остатка"></section>
+
+      <form class="quick" id="quick" autocomplete="off">
+        <div class="qtype">
+          <div class="seg" role="group" aria-label="Тип записи">
+            <button type="button" data-type="out" aria-pressed="true">Расход</button>
+            <button type="button" data-type="in" aria-pressed="false">Доход</button>
+          </div>
+          <label class="chip"><input type="checkbox" name="rep"> Каждый месяц</label>
+        </div>
+        <input name="amount" type="number" min="1" step="1" placeholder="Сумма" aria-label="Сумма" required>
+        <input name="title" placeholder="На что или откуда" aria-label="Описание" required>
+        <select name="cat" aria-label="Категория"></select>
+        <input name="date" type="date" aria-label="Дата" required>
+        <button class="primary" type="submit">Добавить</button>
+      </form>
+
+      <div class="grid">
+        <section aria-label="Записи">
+          <div class="ledger-head" aria-hidden="true">
+            <span>Дата</span><span>Описание</span><span>Сумма</span><span>Остаток</span><span></span>
+          </div>
+          <div id="ledger"></div>
+        </section>
+        <div class="side" id="side"></div>
+      </div>
+    </div>
+
+    <div id="yearView" hidden></div>
+  </main>
+</div>
+
+<button class="fab" id="fab" type="button" aria-label="Новая запись">+</button>
+
+<dialog id="impDlg" aria-labelledby="impTitle">
+  <h2 id="impTitle">Импорт таблицы</h2>
+  <p class="empty" style="padding:0 0 10px">Выберите файл .xlsx, .xls, .csv или копию .json. Колонки «доход», «расход», «дата», «описание» находятся автоматически. Строки «НОЯБРЬ 2026» задают месяц.</p>
+  <div class="dlg-actions" style="justify-content:flex-start">
+    <button type="button" class="ghost" id="impPick">Выбрать файл</button>
+  </div>
+  <div class="imp-box" id="impBox"></div>
+  <div class="dlg-actions">
+    <button type="button" class="ghost" id="impCancel">Закрыть</button>
+    <button type="button" class="primary" id="impGo" disabled>Импортировать</button>
+  </div>
+</dialog>
+<input type="file" id="impFile" accept=".xlsx,.xls,.csv,.json" hidden>
+
+<dialog id="dlg" aria-labelledby="dlgTitle">
+  <form id="editForm" autocomplete="off">
+    <h2 id="dlgTitle">Запись</h2>
+    <label>Тип
+      <select name="type" id="eType">
+        <option value="out">Расход</option>
+        <option value="in">Доход</option>
+      </select>
+    </label>
+    <label>Сумма, ₽
+      <input name="amount" type="number" min="1" step="1" required>
+    </label>
+    <label>Описание
+      <input name="title" required>
+    </label>
+    <label>Категория
+      <select name="cat" id="eCat"></select>
+    </label>
+    <label>Дата
+      <input name="date" type="date" required>
+    </label>
+    <label>Заметка
+      <textarea name="note" rows="2" placeholder="Необязательно"></textarea>
+    </label>
+    <label class="chip"><input type="checkbox" name="rep"> Повторять каждый месяц</label>
+    <div class="dlg-actions">
+      <button type="button" class="link danger" id="dlgDelete">Удалить</button>
+      <span class="spacer"></span>
+      <button type="button" class="ghost" id="dlgCancel">Отмена</button>
+      <button type="submit" class="primary">Сохранить</button>
+    </div>
+  </form>
+</dialog>
+
+<script src="app.js"></script>
+</body>
+</html>

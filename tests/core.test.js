@@ -92,3 +92,84 @@ test('emptyState: один счёт и стандартные категории
   assert.equal(s.cur, '2026-11');
   assert.deepEqual(s.items, []);
 });
+
+// ---- Подсчёт остатков, счета, переводы ----
+const mk = (items, extra = {}) => ({
+  ...Core.emptyState('2026-11'),
+  accounts: [{ id: 1, name: 'Карта', opening: 100000 }, { id: 2, name: 'Наличные', opening: 50000 }],
+  months: ['2026-11', '2026-12'],
+  items, ...extra
+});
+const it = (id, type, date, amount, account, extra = {}) => ({ id, t: id, type, date, title: 't' + id, cat: 'Еда', amount, account, ...extra });
+const base = () => mk([
+  it(3, 'transfer', '2026-11-10', 20000, 1, { toAccount: 2 }),
+  it(1, 'in', '2026-11-03', 30000, 1),
+  it(2, 'out', '2026-11-05', 10000, 2),
+  it(4, 'out', '2026-12-02', 5000, 1)
+]);
+
+test('calc: общий остаток, доходы и расходы без переводов', () => {
+  const [nov] = Core.calc(base());
+  assert.equal(nov.opening, 150000);
+  assert.equal(nov.inc, 30000);
+  assert.equal(nov.exp, 10000);
+  assert.equal(nov.closing, 170000);
+});
+test('calc: перевод не меняет общий остаток в строке', () => {
+  const [nov] = Core.calc(base());
+  assert.deepEqual(nov.rows.map(r => [r.id, r.balance]), [[1, 180000], [2, 170000], [3, 170000]]);
+});
+test('calc: начало следующего месяца равно концу предыдущего', () => {
+  const [nov, dec] = Core.calc(base());
+  assert.equal(dec.opening, nov.closing);
+  assert.equal(dec.closing, 165000);
+});
+test('calc: внутри дня порядок по t', () => {
+  const s = mk([it(2, 'out', '2026-11-05', 1, 1), it(1, 'in', '2026-11-05', 5, 1)]);
+  assert.deepEqual(Core.calc(s)[0].rows.map(r => r.id), [1, 2]);
+});
+test('accountBalances: остатки счетов на конец месяца', () => {
+  assert.deepEqual(Core.accountBalances(base(), '2026-11'), { 1: 110000, 2: 60000 });
+  assert.deepEqual(Core.accountBalances(base(), '2026-12'), { 1: 105000, 2: 60000 });
+});
+test('accountBalances: без месяца учитывает все записи', () => {
+  assert.deepEqual(Core.accountBalances(base()), { 1: 105000, 2: 60000 });
+});
+test('accountBalances: сумма счетов равна общему остатку', () => {
+  const s = base();
+  const total = Object.values(Core.accountBalances(s, '2026-11')).reduce((a, b) => a + b, 0);
+  assert.equal(total, Core.calc(s)[0].closing);
+});
+test('запись с удалённым счётом считается в общем остатке', () => {
+  const s = mk([it(1, 'out', '2026-11-05', 1000, 99)]);
+  const [nov] = Core.calc(s);
+  assert.equal(nov.closing, 149000);
+  const b = Core.accountBalances(s, '2026-11');
+  assert.equal(b[99], -1000);
+  assert.equal(Object.values(b).reduce((a, x) => a + x, 0), nov.closing);
+});
+test('запись без категории не роняет подсчёт', () => {
+  const s = mk([{ id: 1, t: 1, type: 'out', date: '2026-11-05', title: 'x', amount: 500, account: 1 }]);
+  assert.equal(Core.calc(s)[0].exp, 500);
+});
+test('перевод на тот же счёт ничего не меняет', () => {
+  const s = mk([it(1, 'transfer', '2026-11-05', 7000, 1, { toAccount: 1 })]);
+  assert.deepEqual(Core.accountBalances(s, '2026-11'), { 1: 100000, 2: 50000 });
+  assert.equal(Core.calc(s)[0].closing, 150000);
+});
+test('canDeleteAccount: правила', () => {
+  assert.equal(Core.canDeleteAccount(base(), 1).ok, false);
+  assert.match(Core.canDeleteAccount(base(), 1).reason, /запис/);
+  assert.equal(Core.canDeleteAccount(base(), 2).ok, false);
+  const empty = mk([]);
+  assert.deepEqual(Core.canDeleteAccount(empty, 2), { ok: true });
+  const single = { ...empty, accounts: [empty.accounts[0]] };
+  assert.equal(Core.canDeleteAccount(single, 1).ok, false);
+  assert.match(Core.canDeleteAccount(single, 1).reason, /хотя бы один/);
+});
+test('nextKey и daysIn', () => {
+  assert.equal(Core.nextKey('2026-12'), '2027-01');
+  assert.equal(Core.nextKey('2026-03'), '2026-04');
+  assert.equal(Core.daysIn('2026-02'), 28);
+  assert.equal(Core.daysIn('2028-02'), 29);
+});

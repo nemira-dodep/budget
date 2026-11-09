@@ -81,5 +81,55 @@
     return s;
   }
 
-  return { parseMoney, fmtMoney, money, DEFAULT_CATS, emptyState, migrate, monthKey };
+  // ---- Подсчёт ----
+  const nextKey = key => {
+    let [y, m] = key.split('-').map(Number);
+    m++; if (m > 12) { m = 1; y++; }
+    return `${y}-${String(m).padStart(2, '0')}`;
+  };
+  const daysIn = key => { const [y, m] = key.split('-').map(Number); return new Date(y, m, 0).getDate(); };
+  const byDate = (a, b) => a.date < b.date ? -1 : a.date > b.date ? 1 : a.t - b.t;
+  const openingTotal = S => S.accounts.reduce((a, x) => a + x.opening, 0);
+
+  // Месяцы с общим остатком. Перевод между счетами не входит в доходы и расходы
+  // и не меняет общий остаток.
+  function calc(S) {
+    const months = [...new Set(S.months)].sort();
+    let bal = openingTotal(S);
+    return months.map(key => {
+      const items = S.items.filter(i => monthKey(i.date) === key).sort(byDate);
+      const opening = bal;
+      let inc = 0, exp = 0;
+      const rows = items.map(i => {
+        if (i.type === 'in') { bal += i.amount; inc += i.amount; }
+        else if (i.type === 'out') { bal -= i.amount; exp += i.amount; }
+        return { ...i, balance: bal };
+      });
+      return { key, opening, inc, exp, closing: bal, rows };
+    });
+  }
+
+  // Остатки счетов на конец месяца включительно (без аргумента: по всем записям).
+  // Записи с неизвестным счётом получают собственный ключ, чтобы сумма сходилась.
+  function accountBalances(S, upTo) {
+    const b = {};
+    S.accounts.forEach(a => { b[a.id] = a.opening; });
+    const add = (id, v) => { b[id] = (b[id] || 0) + v; };
+    S.items.filter(i => !upTo || monthKey(i.date) <= upTo).forEach(i => {
+      if (i.type === 'in') add(i.account, i.amount);
+      else if (i.type === 'out') add(i.account, -i.amount);
+      else if (i.type === 'transfer') { add(i.account, -i.amount); add(i.toAccount, i.amount); }
+    });
+    return b;
+  }
+
+  function canDeleteAccount(S, id) {
+    if (S.accounts.length <= 1) return { ok: false, reason: 'Должен остаться хотя бы один счёт' };
+    if (S.items.some(i => i.account === id || i.toAccount === id)) {
+      return { ok: false, reason: 'У счёта есть записи. Сначала удалите или перенесите их' };
+    }
+    return { ok: true };
+  }
+
+  return { parseMoney, fmtMoney, money, DEFAULT_CATS, emptyState, migrate, monthKey, nextKey, daysIn, calc, accountBalances, canDeleteAccount };
 });

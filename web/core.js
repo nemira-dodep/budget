@@ -60,6 +60,7 @@
       throw new Error('bad data');
     }
     const s = JSON.parse(JSON.stringify(raw));
+    if (s.version !== undefined && s.version !== 1 && s.version !== 2) throw new Error('newer version');
     if (s.version !== 2) {
       s.accounts = [{ id: 1, name: 'Основной', opening: kop(s.opening) }];
       delete s.opening;
@@ -129,6 +130,15 @@
       return { ok: false, reason: 'У счёта есть записи. Сначала удалите или перенесите их' };
     }
     return { ok: true };
+  }
+
+  // Правка записи из диалога. Исходная запись не меняется; при ошибке возвращает {ok:false, error}.
+  function applyEdit(it, v, cats) {
+    const amount = parseMoney(v.amount);
+    if (amount === null || !(amount > 0)) return { ok: false, error: 'Введите сумму, например 1500 или 1500,50' };
+    const cat = v.cat === '__new__' ? cats[v.type][0] : v.cat;
+    return { ok: true, item: { ...it, type: v.type, amount, title: v.title.trim(), cat,
+      date: v.date, note: v.note.trim(), rep: !!v.rep } };
   }
 
   // ---- Разбор таблиц ----
@@ -218,5 +228,5 @@
     return { items, months: [...months].sort(), opening };
   }
 
-  return { parseMoney, fmtMoney, money, DEFAULT_CATS, emptyState, migrate, monthKey, nextKey, daysIn, calc, accountBalances, canDeleteAccount, parseSheet, guessCat, localDate };
+  return { parseMoney, fmtMoney, money, DEFAULT_CATS, emptyState, migrate, monthKey, nextKey, daysIn, calc, accountBalances, canDeleteAccount, parseSheet, guessCat, localDate, applyEdit };
 });

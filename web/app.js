@@ -521,15 +521,12 @@ ef.addEventListener('submit', e => {
   e.preventDefault();
   const it = S.items.find(i => i.id === editingId);
   if (!it) return dlg.close();
-  it.type = ef.type.value;
-  const amt = num(ef.amount.value);
-  if (!(amt > 0)) { toast('Введите сумму, например 1500 или 1500,50'); return ef.amount.focus(); }
-  it.amount = amt;
-  it.title = ef.title.value.trim();
-  it.cat = $('#eCat').value === '__new__' ? S.cats[it.type][0] : $('#eCat').value;
-  it.date = ef.date.value;
-  it.note = ef.note.value.trim();
-  it.rep = ef.rep.checked;
+  const res = Core.applyEdit(it, {
+    type: ef.type.value, amount: ef.amount.value, title: ef.title.value, cat: $('#eCat').value,
+    date: ef.date.value, note: ef.note.value, rep: ef.rep.checked
+  }, S.cats);
+  if (!res.ok) { toast(res.error); return ef.amount.focus(); }
+  Object.assign(it, res.item);
   ensureMonth(monthKey(it.date));
   S.cur = monthKey(it.date);
   save(); dlg.close(); render();
@@ -810,10 +807,18 @@ if (window.__TAURI__?.event) {
   window.__TAURI__.event.listen('before-quit', async () => { await Storage.flush(); tauriInvoke('quit_app'); });
 }
 
-// Файл данных повреждён: предлагаем последнюю копию, повреждённый файл остаётся как data.json.broken
+// Экран ошибки вместо пустого окна: данные не трогаем
+function fatal(title, text) {
+  document.body.innerHTML = `<main style="padding:40px;max-width:560px"><h1 style="font:600 22px var(--serif)">${esc(title)}</h1>
+    <p class="dlg-text">${esc(text)}</p></main>`;
+}
+
+// Файл данных повреждён: предлагаем последнюю копию. Повреждённый файл остаётся как data.json.broken.
+// Если отказаться, начинаем с пустого бюджета, но на диск ничего не пишем, пока вы сами не внесёте запись.
 async function recoverBroken() {
   const r = await ask({ title: 'Файл данных повреждён',
-    text: 'Он сохранён рядом как data.json.broken. Можно восстановить данные из последней копии.',
+    text: 'Он сохранён рядом как data.json.broken. Можно восстановить данные из последней копии. ' +
+          'Если начать заново, старые копии останутся в папке копий.',
     ok: 'Восстановить из копии' });
   if (r) {
     try { return Core.migrate(JSON.parse(await tauriInvoke('restore_latest_backup'))); }
@@ -824,8 +829,8 @@ async function recoverBroken() {
 
 async function start() {
   const r = await Storage.load(localDate().slice(0, 7));
+  if (r.newer) return fatal('Данные из более новой версии', 'Файл данных создан более новой версией приложения. Обновите приложение, данные не тронуты.');
   S = r.broken ? await recoverBroken() : r.state;
-  if (r.broken) save();
   $('#quick [name=date]').value = localDate();
   syncSeg();
   render();
@@ -840,4 +845,4 @@ async function start() {
     });
   }
 }
-start();
+start().catch(err => fatal('Не удалось открыть данные', 'Данные не тронуты. Закройте и откройте приложение ещё раз. Подробности: ' + err));

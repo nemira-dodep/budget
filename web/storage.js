@@ -17,12 +17,16 @@ const Storage = (() => {
     try { return Core.migrate(JSON.parse(raw)); } catch (e) { return null; }
   };
 
-  // → { state } или { broken: true }
+  // → { state } | { broken: true } | { newer: true }
   api.load = async todayKey => {
     if (!T()) return { state: fromLocal() || Core.emptyState(todayKey) };
     const r = await invoke('load_data');
     if (r.status === 'ok') {
-      try { return { state: Core.migrate(JSON.parse(r.text)) }; } catch (e) { return { broken: true }; }
+      try { return { state: Core.migrate(JSON.parse(r.text)) }; } catch (e) {
+        if (/newer version/.test(String(e.message))) return { newer: true };
+        await invoke('quarantine_data');   // файл читается, но не подходит: убрать в сторону, не затирать
+        return { broken: true };
+      }
     }
     if (r.status === 'broken') return { broken: true };
     // первый запуск файла: переносим данные из старого хранилища окна

@@ -105,8 +105,11 @@ fn daily_backup(app: &tauri::AppHandle) {
 
 #[tauri::command]
 fn load_data(app: tauri::AppHandle) -> Result<LoadResult, String> {
-    let path = app_dir(&app)?.join("data.json");
-    match data::load_data_file(&path).map_err(|e| e.to_string())? {
+    let base = app_dir(&app)?;
+    let path = base.join("data.json");
+    let (dir, _) = backup_dirs(&app)?;
+    let dirs = vec![dir, base.join("backups")];
+    match data::load_or_recover(&path, &dirs).map_err(|e| e.to_string())? {
         data::Loaded::None => Ok(LoadResult { status: "none", text: None }),
         data::Loaded::Broken => Ok(LoadResult { status: "broken", text: None }),
         data::Loaded::Ok(text) => {
@@ -168,6 +171,12 @@ fn open_backup_dir(app: tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+/// Файл данных читается, но не подходит приложению: убрать его в сторону как data.json.broken.
+#[tauri::command]
+fn quarantine_data(app: tauri::AppHandle) -> Result<(), String> {
+    data::quarantine(&app_dir(&app)?.join("data.json")).map_err(|e| e.to_string())
+}
+
 /// Интерфейс сохранил данные и просит закрыть приложение.
 #[tauri::command]
 fn quit_app(app: tauri::AppHandle) {
@@ -182,7 +191,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             sync_reminders, save_file, open_table,
             load_data, save_data, restore_latest_backup, backup_status,
-            choose_backup_dir, open_backup_dir, quit_app
+            choose_backup_dir, open_backup_dir, quit_app, quarantine_data
         ])
         .setup(|app| {
             app.manage(Store::default());

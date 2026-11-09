@@ -35,6 +35,37 @@ pub fn atomic_write(path: &Path, text: &str) -> io::Result<()> {
     res
 }
 
+/// Это JSON-объект с массивами `items` и `months` (минимальная форма бюджета).
+fn has_data_shape(text: &str) -> bool {
+    match serde_json::from_str::<serde_json::Value>(text) {
+        Ok(v) => v.get("items").map_or(false, |x| x.is_array()) && v.get("months").map_or(false, |x| x.is_array()),
+        Err(_) => false,
+    }
+}
+
+/// Убирает файл данных в сторону как `<имя>.broken`, ничего не стирая. Нет файла: тоже успех.
+pub fn quarantine(path: &Path) -> io::Result<()> {
+    if !path.exists() {
+        return Ok(());
+    }
+    let broken = sibling(path, ".broken");
+    let _ = fs::remove_file(&broken);
+    fs::rename(path, &broken)
+}
+
+/// Как `load_data_file`, но если файла нет, а рядом остался `.broken` или есть рабочая копия,
+/// это не первый запуск: возвращает `Broken`, чтобы предложить восстановление, а не начинать с пустого.
+pub fn load_or_recover(path: &Path, backup_dirs: &[PathBuf]) -> io::Result<Loaded> {
+    match load_data_file(path)? {
+        Loaded::None => {
+            let leftover = sibling(path, ".broken").exists()
+                || backup_dirs.iter().any(|d| latest_valid_backup(d).is_some());
+            Ok(if leftover { Loaded::Broken } else { Loaded::None })
+        }
+        other => Ok(other),
+    }
+}
+
 /// Читает файл данных. Пустой или не JSON файл не трогается, а переименовывается в `.broken`.
 pub fn load_data_file(path: &Path) -> io::Result<Loaded> {
     let bytes = match fs::read(path) {
@@ -42,9 +73,7 @@ pub fn load_data_file(path: &Path) -> io::Result<Loaded> {
         Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(Loaded::None),
         Err(e) => return Err(e),
     };
-    let valid = String::from_utf8(bytes)
-        .ok()
-        .filter(|t| serde_json::from_str::<serde_json::Value>(t).is_ok());
+    let valid = String::from_utf8(bytes).ok().filter(|t| has_data_shape(t));
     match valid {
         Some(text) => Ok(Loaded::Ok(text)),
         None => {
@@ -226,9 +255,10 @@ mod tests {
     fn load_valid_returns_text() {
         let d = tempdir().unwrap();
         let p = d.path().join("data.json");
-        fs::write(&p, "{\"version\":2}").unwrap();
+        let text = "{\"version\":2,\"items\":[],\"months\":[]}";
+        fs::write(&p, text).unwrap();
         match load_data_file(&p).unwrap() {
-            Loaded::Ok(t) => assert_eq!(t, "{\"version\":2}"),
+            Loaded::Ok(t) => assert_eq!(t, text),
             _ => panic!("expected Ok"),
         }
     }
@@ -386,5 +416,77 @@ mod restore_tests {
         fs::write(&data, "{\"keep\":1}").unwrap();
         assert!(restore_from_backup(&data, &[d.path().join("none")]).is_err());
         assert_eq!(fs::read_to_string(&data).unwrap(), "{\"keep\":1}");
+    }
+}
+
+#[cfg(test)]
+mod review_fix_tests {
+    use super::*;
+    use std::fs;
+    use tempfile::tempdir;
+
+    #[test]
+    fn valid_json_of_wrong_shape_is_broken_and_kept() {
+        for text in ["null", "{\"a\":1}", "[]", "{\"items\":[]}"] {
+            let d = tempdir().unwrap();
+            let p = d.path().join("data.json");
+            fs::write(&p, text).unwrap();
+            assert!(matches!(load_data_file(&p).unwrap(), Loaded::Broken), "{}", text);
+            assert!(!p.exists());
+            assert_eq!(fs::read_to_string(d.path().join("data.json.broken")).unwrap(), text);
+        }
+    }
+
+    #[test]
+    fn minimal_valid_shape_is_ok() {
+        let d = tempdir().unwrap();
+        let p = d.path().join("data.json");
+        fs::write(&p, "{\"items\":[],\"months\":[]}").unwrap();
+        assert!(matches!(load_data_file(&p).unwrap(), Loaded::Ok(_)));
+    }
+
+    #[test]
+    fn quarantine_moves_file_and_tolerates_missing() {
+        let d = tempdir().unwrap();
+        let p = d.path().join("data.json");
+        quarantine(&p).unwrap();
+        fs::write(&p, "{\"x\":1}").unwrap();
+        quarantine(&p).unwrap();
+        assert!(!p.exists());
+        assert_eq!(fs::read_to_string(d.path().join("data.json.broken")).unwrap(), "{\"x\":1}");
+    }
+
+    #[test]
+    fn missing_file_with_broken_leftover_needs_recovery() {
+        let d = tempdir().unwrap();
+        fs::write(d.path().join("data.json.broken"), "x").unwrap();
+        let r = load_or_recover(&d.path().join("data.json"), &[]).unwrap();
+        assert!(matches!(r, Loaded::Broken));
+    }
+
+    #[test]
+    fn missing_file_with_backup_needs_recovery() {
+        let d = tempdir().unwrap();
+        let bk = d.path().join("backups");
+        fs::create_dir_all(&bk).unwrap();
+        fs::write(bk.join("budget-2026-11-05.json"), "{\"v\":5}").unwrap();
+        let r = load_or_recover(&d.path().join("data.json"), &[bk]).unwrap();
+        assert!(matches!(r, Loaded::Broken));
+    }
+
+    #[test]
+    fn missing_everything_is_first_launch() {
+        let d = tempdir().unwrap();
+        let r = load_or_recover(&d.path().join("data.json"), &[d.path().join("none")]).unwrap();
+        assert!(matches!(r, Loaded::None));
+    }
+
+    #[test]
+    fn existing_good_file_is_returned_as_is() {
+        let d = tempdir().unwrap();
+        let p = d.path().join("data.json");
+        fs::write(&p, "{\"items\":[],\"months\":[]}").unwrap();
+        let r = load_or_recover(&p, &[]).unwrap();
+        assert!(matches!(r, Loaded::Ok(_)));
     }
 }

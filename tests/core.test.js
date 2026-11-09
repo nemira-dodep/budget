@@ -208,3 +208,38 @@ test('parseSheet: ячейка с копейками как число', () => {
   assert.equal(r.items[0].amount, 1999);
   assert.equal(r.items[0].type, 'out');
 });
+
+// ---- Исправления по итогам ревью ----
+test('migrate: данные более новой версии не пересчитываются и не принимаются', () => {
+  const v3 = { version: 3, accounts: [{ id: 2, name: 'X', opening: 5 }], months: ['2026-11'],
+    items: [{ id: 1, t: 1, type: 'in', date: '2026-11-01', title: 'a', cat: 'Другое', amount: 150050, account: 2 }] };
+  assert.throws(() => Core.migrate(v3), /newer version/);
+});
+test('migrate: version 1 явно пересчитывается как v1', () => {
+  const s = Core.migrate({ version: 1, opening: 1, months: ['2026-11'], items: [
+    { id: 1, t: 1, type: 'in', date: '2026-11-01', title: 'a', cat: 'Другое', amount: 2 }] });
+  assert.equal(s.accounts[0].opening, 100);
+  assert.equal(s.items[0].amount, 200);
+});
+
+test('applyEdit: неверная сумма ничего не меняет в записи', () => {
+  const it = { id: 1, t: 1, type: 'out', date: '2026-11-05', title: 'Еда', cat: 'Еда', amount: 100000, account: 1 };
+  const copy = JSON.parse(JSON.stringify(it));
+  const r = Core.applyEdit(it, { type: 'in', amount: 'abc', title: 'x', cat: 'Зарплата', date: '2026-11-06', note: '', rep: false }, Core.DEFAULT_CATS);
+  assert.equal(r.ok, false);
+  assert.match(r.error, /сумму/);
+  assert.deepEqual(it, copy);
+});
+test('applyEdit: верные данные дают новую запись, исходная не меняется', () => {
+  const it = { id: 1, t: 1, type: 'out', date: '2026-11-05', title: 'Еда', cat: 'Еда', amount: 100000, account: 1 };
+  const copy = JSON.parse(JSON.stringify(it));
+  const r = Core.applyEdit(it, { type: 'in', amount: '1 200,50', title: ' ЗП ', cat: 'Зарплата', date: '2026-12-01', note: ' n ', rep: true }, Core.DEFAULT_CATS);
+  assert.equal(r.ok, true);
+  assert.deepEqual(r.item, { ...copy, type: 'in', amount: 120050, title: 'ЗП', cat: 'Зарплата', date: '2026-12-01', note: 'n', rep: true });
+  assert.deepEqual(it, copy);
+});
+test('applyEdit: «+ Своя категория» берёт первую категорию нового типа', () => {
+  const it = { id: 1, t: 1, type: 'out', date: '2026-11-05', title: 'x', cat: 'Еда', amount: 100, account: 1 };
+  const r = Core.applyEdit(it, { type: 'in', amount: '5', title: 'x', cat: '__new__', date: '2026-11-05', note: '', rep: false }, Core.DEFAULT_CATS);
+  assert.equal(r.item.cat, 'Зарплата');
+});

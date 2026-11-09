@@ -1,6 +1,6 @@
 [package]
 name = "budget"
-version = "1.1.0"
+version = "1.2.0"
 description = "Личный бюджет"
 edition = "2021"
 

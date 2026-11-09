@@ -1,37 +1,16 @@
-const KEY = 'budget.v1';
+const KEY = 'budget.v2';          // данные v2 в браузере
+const LEGACY_KEY = 'budget.v1';    // старые данные: только читаем, не трогаем
 const THEME_KEY = 'budget.theme';
-const CATS = {
-  in: ['Зарплата', 'Пенсия', 'Подработка', 'Подарок', 'Другое'],
-  out: ['Еда', 'Транспорт', 'Жильё', 'Техника', 'Одежда', 'Подписки', 'Здоровье', 'Семья', 'Развлечения', 'Другое']
-};
 const $ = s => document.querySelector(s);
-const fmt = n => new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 0 }).format(Math.round(n));
-const money = n => fmt(n) + ' ₽';
+const { fmtMoney: fmt, money, monthKey, nextKey, daysIn, localDate } = Core;
 const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const pad = n => String(n).padStart(2, '0');
-const localDate = (d = new Date()) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-const monthKey = date => date.slice(0, 7);
-const nextKey = key => {
-  let [y, m] = key.split('-').map(Number);
-  m++; if (m > 12) { m = 1; y++; }
-  return `${y}-${pad(m)}`;
-};
-const daysIn = key => { const [y, m] = key.split('-').map(Number); return new Date(y, m, 0).getDate(); };
+// Копейки → текст для поля ввода: «1500,50» без пробелов
+const plain = k => fmt(k).replace(/[\s\u00a0\u202f]/g, '').replace('\u2212', '-');
 const monthName = key => {
   const [y, m] = key.split('-').map(Number);
   const s = new Date(y, m - 1, 1).toLocaleDateString('ru-RU', { month: 'long', year: 'numeric' }).replace(' г.', '');
   return s[0].toUpperCase() + s.slice(1);
-};
-
-// Пустой бюджет для первого запуска
-const SEED = {
-  opening: 0,
-  cur: localDate().slice(0, 7),
-  months: [localDate().slice(0, 7)],
-  limits: {},
-  goals: [],
-  reminders: [],
-  items: []
 };
 
 // Безопасная работа с хранилищем (в приватном режиме может бросать ошибку)
@@ -46,43 +25,15 @@ let undo = null, toastTimer = null;
 
 function load() {
   try {
-    const s = JSON.parse(store.get(KEY));
-    if (s && Array.isArray(s.items) && Array.isArray(s.months) && typeof s.opening === 'number') {
-      return normalize(s);
-    }
+    const raw = store.get(KEY) || store.get(LEGACY_KEY);
+    if (raw) return Core.migrate(JSON.parse(raw));
   } catch (e) {}
-  return normalize(JSON.parse(JSON.stringify(SEED)));
-}
-// Дополняет данные полями, которых нет в старых копиях
-function normalize(s) {
-  s.limits = s.limits || {};
-  s.goals = s.goals || [];
-  s.reminders = s.reminders || [];
-  const own = t => (s.cats && Array.isArray(s.cats[t]) && s.cats[t].length) ? s.cats[t] : CATS[t];
-  s.cats = { in: [...own('in')], out: [...own('out')] };
-  return s;
+  return Core.emptyState(localDate().slice(0, 7));
 }
 function save() { store.set(KEY, JSON.stringify(S)); syncReminders(); }
 function ensureMonth(key) { if (!S.months.includes(key)) S.months.push(key); }
 
-// Каждый месяц: начало = конец предыдущего, остаток считается по строкам.
-function calc() {
-  const months = [...new Set(S.months)].sort();
-  let bal = S.opening;
-  return months.map(key => {
-    const items = S.items
-      .filter(i => monthKey(i.date) === key)
-      .sort((a, b) => a.date < b.date ? -1 : a.date > b.date ? 1 : a.t - b.t);
-    const opening = bal;
-    let inc = 0, exp = 0;
-    const rows = items.map(i => {
-      if (i.type === 'in') { bal += i.amount; inc += i.amount; }
-      else { bal -= i.amount; exp += i.amount; }
-      return { ...i, balance: bal };
-    });
-    return { key, opening, inc, exp, closing: bal, rows };
-  });
-}
+const calc = () => Core.calc(S);
 
 // Копирует записи с отметкой «каждый месяц» из одного месяца в другой.
 function copyRecurring(from, to) {
@@ -300,7 +251,7 @@ function ask({ title, text = '', fields = [], ok = 'Сохранить', danger 
     $('#askTitle').textContent = title;
     $('#askText').textContent = text;
     $('#askFields').innerHTML = fields.map(x => `<label>${esc(x.label)}
-      <input name="${x.name}" type="${x.type || 'text'}" value="${esc(x.value ?? '')}" placeholder="${esc(x.placeholder || '')}"
+      <input name="${x.name}" type="${x.type || 'text'}" ${x.inputmode ? `inputmode="${x.inputmode}"` : ''} value="${esc(x.value ?? '')}" placeholder="${esc(x.placeholder || '')}"
         ${x.min != null ? `min="${x.min}"` : ''} ${x.required === false ? '' : 'required'}></label>`).join('');
     const okBtn = $('#askOk');
     okBtn.textContent = ok;
@@ -313,7 +264,8 @@ function ask({ title, text = '', fields = [], ok = 'Сохранить', danger 
     f.querySelector('input')?.focus();
   });
 }
-const num = v => Number(String(v ?? '').replace(/\s/g, '').replace(',', '.'));
+// Ввод суммы → копейки; NaN, если это не сумма
+const num = v => { const k = Core.parseMoney(v); return k === null ? NaN : k; };
 
 // ---- свои категории ----
 function renderCats() {
@@ -399,8 +351,8 @@ document.addEventListener('click', e => {
   }
   if (hit('#editOpening') || hit('#obOpening')) {
     ask({ title: 'Стартовый остаток', text: 'Сколько денег у вас на начало первого месяца. Дальше остаток считается сам.',
-          fields: [{ name: 'v', label: 'Сумма, ₽', type: 'number', value: S.opening }] })
-      .then(r => { if (r && !isNaN(num(r.v))) { S.opening = num(r.v); save(); render(); } });
+          fields: [{ name: 'v', label: 'Сумма, ₽', inputmode: 'decimal', value: plain(S.accounts[0].opening) }] })
+      .then(r => { if (r && !isNaN(num(r.v))) { S.accounts[0].opening = num(r.v); save(); render(); } });
     return;
   }
   const seg = hit('[data-type]');
@@ -416,7 +368,7 @@ document.addEventListener('click', e => {
   if (lim) {
     const c = lim.dataset.limit;
     ask({ title: `Лимит: ${c}`, text: 'Сколько можно потратить на эту категорию за месяц. Ноль убирает лимит.',
-          fields: [{ name: 'v', label: 'Лимит в месяц, ₽', type: 'number', min: 0, value: S.limits[c] || '' }] })
+          fields: [{ name: 'v', label: 'Лимит в месяц, ₽', inputmode: 'decimal', value: S.limits[c] ? plain(S.limits[c]) : '' }] })
       .then(r => {
         if (!r) return;
         const n = num(r.v);
@@ -429,7 +381,7 @@ document.addEventListener('click', e => {
   if (hit('#newGoal')) {
     ask({ title: 'Новая цель', text: 'На что вы копите и сколько для этого нужно.',
           fields: [{ name: 'name', label: 'Название', placeholder: 'Например, новый ноутбук' },
-                   { name: 'target', label: 'Нужная сумма, ₽', type: 'number', min: 1 }], ok: 'Создать' })
+                   { name: 'target', label: 'Нужная сумма, ₽', inputmode: 'decimal' }], ok: 'Создать' })
       .then(r => {
         if (!r || !r.name.trim() || !(num(r.target) > 0)) return;
         const now = Date.now();
@@ -442,7 +394,7 @@ document.addEventListener('click', e => {
   if (ga) {
     const g = S.goals.find(x => x.id === Number(ga.dataset.goalAdd));
     if (!g) return;
-    ask({ title: `Отложить в «${g.name}»`, fields: [{ name: 'v', label: 'Сколько отложить, ₽', type: 'number', min: 1 }], ok: 'Внести' })
+    ask({ title: `Отложить в «${g.name}»`, fields: [{ name: 'v', label: 'Сколько отложить, ₽', inputmode: 'decimal' }], ok: 'Внести' })
       .then(r => { if (r && num(r.v) > 0) { g.saved += num(r.v); save(); render(); } });
     return;
   }
@@ -535,11 +487,11 @@ $('#filter').addEventListener('change', e => { ui.filter = e.target.value; rende
 $('#quick').addEventListener('submit', e => {
   e.preventDefault();
   const f = e.target;
-  const amount = Number(f.amount.value);
-  if (!(amount > 0)) return f.amount.focus();
+  const amount = num(f.amount.value);
+  if (!(amount > 0)) { toast('Введите сумму, например 1500 или 1500,50'); return f.amount.focus(); }
   const date = f.date.value || localDate();
   const now = Date.now();
-  S.items.push({ id: now, t: now, type: ui.type, date, title: f.title.value.trim(), cat: f.cat.value === '__new__' ? S.cats[ui.type][0] : f.cat.value, amount, rep: f.rep.checked });
+  S.items.push({ id: now, t: now, type: ui.type, date, title: f.title.value.trim(), cat: f.cat.value === '__new__' ? S.cats[ui.type][0] : f.cat.value, amount, rep: f.rep.checked, account: S.accounts[0].id });
   ensureMonth(monthKey(date));
   S.cur = monthKey(date);
   save();
@@ -558,7 +510,7 @@ function openEdit(id) {
   if (!it) return;
   editingId = id;
   ef.type.value = it.type;
-  ef.amount.value = it.amount;
+  ef.amount.value = plain(it.amount);
   ef.title.value = it.title;
   ef.date.value = it.date;
   ef.note.value = it.note || '';
@@ -573,7 +525,9 @@ ef.addEventListener('submit', e => {
   const it = S.items.find(i => i.id === editingId);
   if (!it) return dlg.close();
   it.type = ef.type.value;
-  it.amount = Number(ef.amount.value);
+  const amt = num(ef.amount.value);
+  if (!(amt > 0)) { toast('Введите сумму, например 1500 или 1500,50'); return ef.amount.focus(); }
+  it.amount = amt;
   it.title = ef.title.value.trim();
   it.cat = $('#eCat').value === '__new__' ? S.cats[it.type][0] : $('#eCat').value;
   it.date = ef.date.value;
@@ -594,7 +548,7 @@ $('#dlgDelete').addEventListener('click', () => {
 $('#exportCsv').addEventListener('click', () => {
   const rows = [['Месяц', 'Дата', 'Тип', 'Категория', 'Описание', 'Заметка', 'Сумма', 'Остаток']];
   calc().forEach(m => m.rows.forEach(r =>
-    rows.push([m.key, r.date, r.type === 'in' ? 'Доход' : 'Расход', r.cat, r.title, r.note || '', r.amount, r.balance])));
+    rows.push([m.key, r.date, r.type === 'in' ? 'Доход' : 'Расход', r.cat, r.title, r.note || '', plain(r.amount), plain(r.balance)])));
   const text = '﻿' + rows.map(r => r.map(v => `"${String(v).replace(/"/g, '""')}"`).join(';')).join('\r\n');
   download('budget.csv', text, 'text/csv;charset=utf-8');
 });
@@ -613,10 +567,7 @@ $('#file').addEventListener('change', async e => {
   }
 });
 function importText(text) {
-  const s = JSON.parse(text);
-  if (!Array.isArray(s.items) || !Array.isArray(s.months) || typeof s.opening !== 'number') throw new Error('bad');
-  S = normalize(s);
-  if (!S.months.includes(S.cur)) S.cur = [...S.months].sort().pop();
+  S = Core.migrate(JSON.parse(text));   // бросает 'bad data' на чужих файлах
   save(); render();
 }
 
@@ -713,92 +664,6 @@ document.addEventListener('submit', e => {
 });
 
 // ---- импорт таблиц ----
-const MONTH_WORDS = ['январ', 'феврал', 'март', 'апрел', 'май', 'июн', 'июл', 'август', 'сентябр', 'октябр', 'ноябр', 'декабр'];
-const MONTH_NUM = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
-const CAT_RULES = {
-  in: [[/зп|зарплат|аванс/, 'Зарплата'], [/пенс/, 'Пенсия'], [/подраб|фриланс/, 'Подработка']],
-  out: [[/маме|семь|ребен/, 'Семья'], [/еда|обед|продукт|кафе|ресторан|доставк/, 'Еда'],
-        [/такси|бензин|метро|проезд|парков/, 'Транспорт'], [/квартир|аренд|ипотек|коммунал|жкх|ремонт/, 'Жильё'],
-        [/мак|айфон|iphone|телефон|пылесос|техник|ноут|компьют|apple|наушник/, 'Техника'],
-        [/одежд|обув|куртк|джинс/, 'Одежда'], [/впн|подписк|netflix|spotify|icloud|vpn/, 'Подписки'],
-        [/аптек|врач|лекар|стоматолог|анализ/, 'Здоровье'], [/steam|игр|кино|развлеч|фигурк/, 'Развлечения']]
-};
-function guessCat(type, title) {
-  const t = title.toLowerCase();
-  const hit = CAT_RULES[type].find(([re]) => re.test(t));
-  return hit ? hit[1] : 'Другое';
-}
-const toNum = v => {
-  if (typeof v === 'number') return v;
-  const n = Number(String(v ?? '').replace(/\s/g, '').replace(',', '.'));
-  return isNaN(n) ? 0 : n;
-};
-function parseDate(v) {
-  if (v instanceof Date) return localDate(v);
-  if (typeof v === 'number' && v > 20000 && v < 80000) {
-    const d = new Date(Math.round((v - 25569) * 86400 * 1000));
-    return localDate(new Date(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
-  }
-  const m = String(v ?? '').match(/(\d{1,2})[.\/-](\d{1,2})[.\/-](\d{4})/);
-  return m ? `${m[3]}-${pad(m[2])}-${pad(m[1])}` : null;
-}
-function monthFromCell(text) {
-  const m = text.trim().toLowerCase().match(/^([а-яё]+)\s*(\d{4})?$/);
-  if (!m) return null;
-  const idx = MONTH_WORDS.findIndex(w => m[1].startsWith(w));
-  return idx < 0 ? null : { num: MONTH_NUM[idx], year: m[2] ? Number(m[2]) : null };
-}
-function mapHeader(cells) {
-  const low = cells.map(c => c.toLowerCase());
-  const find = (...keys) => low.findIndex(c => keys.some(k => c.includes(k)));
-  return {
-    incAmt: find('доход'), incTitle: find('откуда', 'источник'),
-    expAmt: find('расход'), expTitle: find('на что', 'назначен', 'описан'),
-    date: find('дата')
-  };
-}
-// Разбирает первый лист таблицы: строки-месяцы, шапка «доход/расход», строки записей.
-function parseSheet(rows) {
-  const items = [], months = new Set();
-  let ctx = null, map = null, lastDay = 1, opening = null;
-  const defYear = Number(S.cur.slice(0, 4));
-  let seq = Date.now();
-  for (const row of rows) {
-    if (!Array.isArray(row)) continue;
-    const cells = row.map(v => v instanceof Date ? '' : String(v ?? '').trim());
-    const filled = cells.filter(Boolean);
-    if (!filled.length) continue;
-    const low = cells.map(c => c.toLowerCase());
-    if (low.some(c => c.includes('доход')) && low.some(c => c.includes('расход'))) { map = mapHeader(cells); continue; }
-    const mh = filled.length <= 2 ? monthFromCell(filled[0]) : null;
-    if (mh) {
-      const year = mh.year || (ctx ? Number(ctx.slice(0, 4)) : defYear);
-      ctx = `${year}-${pad(mh.num)}`;
-      lastDay = 1;
-      const num = row.find(v => typeof v === 'number');
-      if (opening === null && num !== undefined && items.length === 0) opening = num;
-      continue;
-    }
-    if (!map) continue;
-    const sides = [
-      { type: 'in', amount: toNum(row[map.incAmt]), col: map.incTitle },
-      { type: 'out', amount: toNum(row[map.expAmt]), col: map.expTitle }
-    ];
-    for (const s of sides) {
-      if (!(s.amount > 0)) continue;
-      const title = (s.col >= 0 ? String(row[s.col] ?? '').trim() : '') || (s.type === 'in' ? 'Доход' : 'Расход');
-      let date = map.date >= 0 ? parseDate(row[map.date]) : null;
-      const tm = title.match(/(\d{1,2})[.\-](\d{1,2})(?!\d)/);
-      if (!date && tm && ctx && Number(tm[2]) === Number(ctx.slice(5, 7))) date = `${ctx}-${pad(tm[1])}`;
-      if (!date) date = `${ctx || S.cur}-${pad(lastDay)}`;
-      else lastDay = Number(date.slice(8, 10));
-      months.add(monthKey(date));
-      seq++;
-      items.push({ id: seq, t: seq, type: s.type, date, title, cat: guessCat(s.type, title), amount: s.amount });
-    }
-  }
-  return { items, months: [...months].sort(), opening };
-}
 let xlsxPromise = null;
 // Библиотека таблиц тяжёлая (~870 КБ): грузим только при первом импорте
 function loadXlsx() {
@@ -840,7 +705,7 @@ async function handleImportFile(name, bytes) {
     await loadXlsx();
     const wb = XLSX.read(bytes, { type: 'array', cellDates: true });
     const rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, raw: true, defval: '' });
-    const res = parseSheet(rows);
+    const res = Core.parseSheet(rows, { cur: S.cur, account: S.accounts[0].id, seq: Date.now() });
     if (!res.items.length) throw new Error('Не нашёл записей. Проверьте, что в таблице есть колонки «доход» и «расход».');
     pendingImport = res;
     showImportPreview(null, res.items);
@@ -884,7 +749,7 @@ function doImport() {
     ensureMonth(monthKey(it.date));
     added++;
   });
-  if (pendingImport.opening != null) S.opening = pendingImport.opening;
+  if (pendingImport.opening != null) S.accounts[0].opening = pendingImport.opening;
   if (pendingImport.months.length) S.cur = pendingImport.months[0];
   save(); render();
   $('#impDlg').close();

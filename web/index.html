@@ -58,7 +58,7 @@
           <label class="chip"><input type="checkbox" name="rep"> Повторять каждый месяц</label>
         </div>
         <label class="f"><span>Сумма, ₽</span>
-          <input name="amount" type="number" min="1" step="1" placeholder="1500" required></label>
+          <input name="amount" type="text" inputmode="decimal" placeholder="1500" required></label>
         <label class="f"><span>Описание</span>
           <input name="title" placeholder="Например, продукты" required></label>
         <label class="f"><span>Категория</span>
@@ -169,7 +169,7 @@
       </select>
     </label>
     <label>Сумма, ₽
-      <input name="amount" type="number" min="1" step="1" required>
+      <input name="amount" type="text" inputmode="decimal" required>
     </label>
     <label>Описание
       <input name="title" required>
@@ -193,6 +193,7 @@
   </form>
 </dialog>
 
+<script src="core.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

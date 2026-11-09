@@ -40,6 +40,20 @@ jobs:
 
       - run: npm ci
 
+      - name: Заметки релиза из CHANGELOG.md
+        id: notes
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: |
+          v="${GITHUB_REF_NAME#v}"
+          {
+            echo 'body<<NOTES_EOF'
+            awk -v v="$v" '$0 ~ "^## " v "( |$)" {f=1; next} /^## / {f=0} f' CHANGELOG.md
+            echo
+            echo '**Установка:** `.dmg` для macOS, `.exe` или `.msi` для Windows. Приложение не подписано сертификатом разработчика, поэтому система покажет предупреждение, как его обойти, написано в README.'
+            echo 'NOTES_EOF'
+          } >> "$GITHUB_OUTPUT"
+
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -48,7 +62,7 @@ jobs:
         with:
           tagName: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || '' }}
           releaseName: Budget ${{ github.ref_name }}
-          releaseBody: "Установщики: .dmg для macOS, .exe/.msi для Windows. Приложение не подписано, см. README."
+          releaseBody: ${{ steps.notes.outputs.body }}
           releaseDraft: false
           args: ${{ matrix.args }}
 

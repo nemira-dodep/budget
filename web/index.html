@@ -25,46 +25,76 @@
           <button type="button" data-view="month" aria-pressed="true">Месяц</button>
           <button type="button" data-view="year" aria-pressed="false">Все месяцы</button>
         </div>
-        <input type="search" id="q" placeholder="Поиск (⌘K)" aria-label="Поиск по записям">
-        <select id="filter" aria-label="Тип записей">
-          <option value="all">Все</option>
-          <option value="in">Доходы</option>
-          <option value="out">Расходы</option>
-        </select>
-        <button class="ghost" id="importTable" type="button">Импорт таблицы</button>
-        <button class="ghost" id="exportCsv" type="button">CSV</button>
-        <button class="ghost" id="backup" type="button">Копия</button>
-        <button class="ghost" id="restore" type="button">Восстановить</button>
+        <details class="menu" id="dataMenu">
+          <summary class="ghost">Данные</summary>
+          <div class="menu-pop">
+            <button type="button" id="catsBtn">Категории</button>
+            <button type="button" id="importTable">Импорт из таблицы</button>
+            <button type="button" id="exportCsv">Сохранить в CSV</button>
+            <button type="button" id="backup">Сохранить копию</button>
+            <button type="button" id="restore">Загрузить копию</button>
+          </div>
+        </details>
+        <button class="ghost" id="helpBtn" type="button" aria-label="Как это работает" title="Как это работает">?</button>
         <input type="file" id="file" accept="application/json" hidden>
       </div>
     </header>
 
     <div id="monthView">
-      <section class="hero" id="hero" aria-live="polite"></section>
-      <section class="curve" id="curve" aria-label="График остатка"></section>
+      <section class="kpis" id="hero" aria-live="polite"></section>
+      <div id="onboard"></div>
 
-      <form class="quick" id="quick" autocomplete="off">
+      <form class="quick widget" id="quick" autocomplete="off">
+        <div class="widget-head">
+          <h3>Новая запись</h3>
+          <p class="wh">Укажите сумму и на что она ушла или откуда пришла. Остаток пересчитается сам.</p>
+        </div>
         <div class="qtype">
           <div class="seg" role="group" aria-label="Тип записи">
             <button type="button" data-type="out" aria-pressed="true">Расход</button>
             <button type="button" data-type="in" aria-pressed="false">Доход</button>
           </div>
-          <label class="chip"><input type="checkbox" name="rep"> Каждый месяц</label>
+          <label class="chip"><input type="checkbox" name="rep"> Повторять каждый месяц</label>
         </div>
-        <input name="amount" type="number" min="1" step="1" placeholder="Сумма" aria-label="Сумма" required>
-        <input name="title" placeholder="На что или откуда" aria-label="Описание" required>
-        <select name="cat" aria-label="Категория"></select>
-        <input name="date" type="date" aria-label="Дата" required>
+        <label class="f"><span>Сумма, ₽</span>
+          <input name="amount" type="number" min="1" step="1" placeholder="1500" required></label>
+        <label class="f"><span>Описание</span>
+          <input name="title" placeholder="Например, продукты" required></label>
+        <label class="f"><span>Категория</span>
+          <select name="cat"></select></label>
+        <label class="f"><span>Дата</span>
+          <input name="date" type="date" required></label>
         <button class="primary" type="submit">Добавить</button>
       </form>
 
-      <div class="grid">
-        <section aria-label="Записи">
-          <div class="ledger-head" aria-hidden="true">
-            <span>Дата</span><span>Описание</span><span>Сумма</span><span>Остаток</span><span></span>
-          </div>
-          <div id="ledger"></div>
-        </section>
+      <div class="dash">
+        <div class="col-main">
+          <section class="widget">
+            <h3>Как менялся остаток</h3>
+            <p class="wh">Каждая точка — одна запись месяца. Пунктир — ноль.</p>
+            <div id="curve"></div>
+          </section>
+          <section class="widget" aria-label="Записи">
+            <div class="widget-head split">
+              <div>
+                <h3>Записи месяца</h3>
+                <p class="wh">Нажмите на запись, чтобы изменить. Крестик удаляет, удаление можно отменить.</p>
+              </div>
+              <div class="filters">
+                <input type="search" id="q" placeholder="Поиск (⌘K)" aria-label="Поиск по записям">
+                <select id="filter" aria-label="Тип записей">
+                  <option value="all">Все</option>
+                  <option value="in">Доходы</option>
+                  <option value="out">Расходы</option>
+                </select>
+              </div>
+            </div>
+            <div class="ledger-head" aria-hidden="true">
+              <span>Дата</span><span>Описание</span><span>Сумма</span><span>Остаток</span><span></span>
+            </div>
+            <div id="ledger"></div>
+          </section>
+        </div>
         <div class="side" id="side"></div>
       </div>
     </div>
@@ -75,9 +105,47 @@
 
 <button class="fab" id="fab" type="button" aria-label="Новая запись">+</button>
 
+<!-- Универсальный диалог: вместо prompt() и confirm() -->
+<dialog id="askDlg" aria-labelledby="askTitle">
+  <form id="askForm" autocomplete="off">
+    <h2 id="askTitle"></h2>
+    <p class="dlg-text" id="askText"></p>
+    <div id="askFields"></div>
+    <div class="dlg-actions">
+      <button type="button" class="ghost" id="askCancel">Отмена</button>
+      <button type="submit" class="primary" id="askOk">Сохранить</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="catDlg" aria-labelledby="catTitle">
+  <h2 id="catTitle">Категории</h2>
+  <p class="dlg-text">Свои категории появятся в списках при добавлении записи. Удалённая категория остаётся в старых записях.</p>
+  <div class="cat-grid" id="catBody"></div>
+  <div class="dlg-actions">
+    <button type="button" class="primary" data-close>Готово</button>
+  </div>
+</dialog>
+
+<dialog id="helpDlg" aria-labelledby="helpTitle">
+  <h2 id="helpTitle">Как это работает</h2>
+  <ol class="help">
+    <li><b>Стартовый остаток.</b> Сколько денег у вас на начало первого месяца. Его можно изменить в блоке «Остаток».</li>
+    <li><b>Записи.</b> Добавляйте доходы и расходы формой «Новая запись». Остаток считается сам, а в конце месяца переходит в следующий.</li>
+    <li><b>Каждый месяц.</b> Отметьте так зарплату или аренду, и они подставятся при создании нового месяца.</li>
+    <li><b>Лимиты и цели.</b> Задайте потолок трат на категорию или накопите на цель. Полоса покраснеет, если вы вышли за лимит.</li>
+    <li><b>Напоминания.</b> Приложение пришлёт уведомление в нужное время, даже если окно закрыто (оно живёт в трее).</li>
+    <li><b>Данные.</b> Все хранится на вашем компьютере. Меню «Данные» сохраняет копию, CSV и загружает таблицы.</li>
+  </ol>
+  <p class="dlg-text"><kbd>N</kbd> новая запись · <kbd>⌘K</kbd> поиск · <kbd>←</kbd> <kbd>→</kbd> переключить месяц</p>
+  <div class="dlg-actions">
+    <button type="button" class="primary" data-close>Понятно</button>
+  </div>
+</dialog>
+
 <dialog id="impDlg" aria-labelledby="impTitle">
   <h2 id="impTitle">Импорт таблицы</h2>
-  <p class="empty" style="padding:0 0 10px">Выберите файл .xlsx, .xls, .csv или копию .json. Колонки «доход», «расход», «дата», «описание» находятся автоматически. Строки «НОЯБРЬ 2026» задают месяц.</p>
+  <p class="dlg-text">Выберите файл .xlsx, .xls, .csv или копию .json. Колонки «доход», «расход», «дата», «описание» находятся автоматически. Строки «НОЯБРЬ 2026» задают месяц.</p>
   <div class="dlg-actions" style="justify-content:flex-start">
     <button type="button" class="ghost" id="impPick">Выбрать файл</button>
   </div>

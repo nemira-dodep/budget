@@ -48,13 +48,19 @@ function load() {
   try {
     const s = JSON.parse(store.get(KEY));
     if (s && Array.isArray(s.items) && Array.isArray(s.months) && typeof s.opening === 'number') {
-      s.limits = s.limits || {};
-      s.goals = s.goals || [];
-      s.reminders = s.reminders || [];
-      return s;
+      return normalize(s);
     }
   } catch (e) {}
-  return JSON.parse(JSON.stringify(SEED));
+  return normalize(JSON.parse(JSON.stringify(SEED)));
+}
+// Дополняет данные полями, которых нет в старых копиях
+function normalize(s) {
+  s.limits = s.limits || {};
+  s.goals = s.goals || [];
+  s.reminders = s.reminders || [];
+  const own = t => (s.cats && Array.isArray(s.cats[t]) && s.cats[t].length) ? s.cats[t] : CATS[t];
+  s.cats = { in: [...own('in')], out: [...own('out')] };
+  return s;
 }
 function save() { store.set(KEY, JSON.stringify(S)); syncReminders(); }
 function ensureMonth(key) { if (!S.months.includes(key)) S.months.push(key); }
@@ -92,7 +98,7 @@ function copyRecurring(from, to) {
 
 function curve(m) {
   const pts = [m.opening, ...m.rows.map(r => r.balance)];
-  if (pts.length < 2) return '<p class="empty">Здесь пока нет записей. Добавьте первую ниже.</p>';
+  if (pts.length < 2) return '<p class="empty">Здесь пока нет записей. Добавьте первую в форме выше.</p>';
   const W = 1000, H = 150, p = 8;
   const min = Math.min(0, ...pts), max = Math.max(...pts, 1), span = (max - min) || 1;
   const x = i => p + i * (W - 2 * p) / (pts.length - 1);
@@ -129,14 +135,15 @@ function ledger(m) {
 
 function breakdown(m) {
   const block = (title, t, total) => {
+    const hint = t === 'out' ? 'На что уходят деньги. Лимит подсветит перерасход.' : 'Откуда приходят деньги.';
     const g = {};
     m.rows.filter(r => r.type === t).forEach(r => g[r.cat] = (g[r.cat] || 0) + r.amount);
     // Категории с лимитом показываем, даже если трат ещё нет
     if (t === 'out') Object.keys(S.limits).forEach(c => { if (!(c in g)) g[c] = 0; });
     const list = Object.entries(g).sort((a, b) => b[1] - a[1]);
-    if (!list.length) return `<section><h3>${title}</h3><p class="empty">Пусто</p></section>`;
+    if (!list.length) return `<section class="widget"><h3>${title}</h3><p class="wh">${hint}</p><p class="empty">Пусто</p></section>`;
     const max = Math.max(1, list[0][1]);
-    return `<section><h3>${title}</h3>${list.map(([c, v]) => {
+    return `<section class="widget"><h3>${title}</h3><p class="wh">${hint}</p>${list.map(([c, v]) => {
       const lim = t === 'out' ? S.limits[c] : 0;
       const over = lim && v > lim;
       const pct = lim ? v / lim * 100 : v / max * 100;
@@ -166,7 +173,7 @@ function breakdown(m) {
   return block('Расходы по категориям', 'out', m.exp || 1) +
          block('Доходы по источникам', 'in', m.inc || 1) +
          remindersHTML() +
-         `<section><h3>Цели накопления</h3>${goals}<button class="ghost" type="button" id="newGoal">Новая цель</button></section>`;
+         `<section class="widget"><h3>Цели накопления</h3><p class="wh">Копите на покупку: вносите суммы и следите за прогрессом.</p>${goals}<button class="ghost" type="button" id="newGoal">Новая цель</button></section>`;
 }
 
 function yearView(cal) {
@@ -216,30 +223,46 @@ function render() {
   const prev = idx > 0 ? cal[idx - 1] : null;
   const pending = prev ? prev.rows.filter(r => r.rep && !m.rows.some(x => x.src === r.id)).length : 0;
 
+  const cnt = t => m.rows.filter(r => r.type === t).length;
   $('#hero').innerHTML = `
-    <div>
+    <div class="tile hero">
       <p class="lbl">Остаток на конец месяца</p>
       <div class="big">${money(m.closing)}</div>
+      <p class="sub">Начало месяца: ${money(m.opening)} ${isFirst
+        ? '<button class="link" type="button" id="editOpening">изменить</button>'
+        : '(остаток прошлого месяца)'}</p>
     </div>
-    <dl class="stats">
-      <div><dt>Начало месяца</dt>
-        <dd>${money(m.opening)} ${isFirst ? '<button class="link" type="button" id="editOpening">изменить</button>' : ''}</dd></div>
-      <div><dt>Доходы</dt><dd class="in">+${money(m.inc)}</dd></div>
-      <div><dt>Расходы</dt><dd class="out">−${money(m.exp)}</dd></div>
-      <div><dt>Итог за месяц</dt><dd class="${net >= 0 ? 'in' : 'out'}">${net >= 0 ? '+' : '−'}${money(Math.abs(net))}</dd></div>
-    </dl>
-    <div class="hero-foot">
-      ${pending ? `<button class="ghost copy-rec" type="button" id="copyRec">Добавить повторяющиеся из прошлого месяца (${pending})</button>` : ''}
+    <div class="tile"><p class="lbl">Доходы</p><div class="num in">${m.inc ? '+' : ''}${money(m.inc)}</div><p class="sub">Записей: ${cnt('in')}</p></div>
+    <div class="tile"><p class="lbl">Расходы</p><div class="num out">${m.exp ? '−' : ''}${money(m.exp)}</div><p class="sub">Записей: ${cnt('out')}</p></div>
+    <div class="tile"><p class="lbl">Итог за месяц</p><div class="num ${net >= 0 ? 'in' : 'out'}">${net > 0 ? '+' : net < 0 ? '−' : ''}${money(Math.abs(net))}</div><p class="sub">Доходы минус расходы</p></div>
+    <div class="kpi-actions">
+      ${pending ? `<button class="ghost" type="button" id="copyRec">Добавить повторяющиеся из прошлого месяца (${pending})</button>` : ''}
       ${cal.length > 1 ? `<button class="link danger" type="button" id="delMonth">Удалить месяц</button>` : ''}
     </div>`;
+
+  $('#onboard').innerHTML = S.items.length ? '' : `
+    <section class="widget onboard">
+      <h3>С чего начать</h3>
+      <ol>
+        <li><span><b>Укажите, сколько денег у вас сейчас.</b> Это стартовый остаток, от него считается всё остальное.</span>
+          <button class="ghost" type="button" id="obOpening">Указать остаток</button></li>
+        <li><span><b>Добавьте доход или расход.</b> Сумма, описание и категория в форме ниже.</span>
+          <button class="ghost" type="button" id="obAdd">Добавить запись</button></li>
+        <li><span><b>Следите за остатком.</b> Он считается сам, а в конце месяца переходит в следующий.</span></li>
+      </ol>
+    </section>`;
 
   $('#curve').innerHTML = curve(m);
   $('#ledger').innerHTML = ledger(m);
   $('#side').innerHTML = breakdown(m);
 }
 
+const catList = type => S.cats[type];
 function fillCats(sel, type, value) {
-  sel.innerHTML = CATS[type].map(c => `<option${c === value ? ' selected' : ''}>${esc(c)}</option>`).join('');
+  const list = catList(type).slice();
+  if (value && !list.includes(value)) list.push(value);
+  sel.innerHTML = list.map(c => `<option${c === value ? ' selected' : ''}>${esc(c)}</option>`).join('') +
+    '<option value="__new__">+ Своя категория…</option>';
 }
 function syncSeg() {
   document.querySelectorAll('[data-type]').forEach(b =>
@@ -270,11 +293,55 @@ function removeItem(id) {
   });
 }
 
+// ---- диалог вместо prompt()/confirm(): resolve(объект с полями) или null ----
+function ask({ title, text = '', fields = [], ok = 'Сохранить', danger = false }) {
+  return new Promise(resolve => {
+    const d = $('#askDlg'), f = $('#askForm');
+    $('#askTitle').textContent = title;
+    $('#askText').textContent = text;
+    $('#askFields').innerHTML = fields.map(x => `<label>${esc(x.label)}
+      <input name="${x.name}" type="${x.type || 'text'}" value="${esc(x.value ?? '')}" placeholder="${esc(x.placeholder || '')}"
+        ${x.min != null ? `min="${x.min}"` : ''} ${x.required === false ? '' : 'required'}></label>`).join('');
+    const okBtn = $('#askOk');
+    okBtn.textContent = ok;
+    okBtn.className = danger ? 'primary danger' : 'primary';
+    let result = null;
+    f.onsubmit = e => { e.preventDefault(); result = Object.fromEntries(new FormData(f)); d.close(); };
+    $('#askCancel').onclick = () => d.close();
+    d.onclose = () => resolve(result);
+    d.showModal();
+    f.querySelector('input')?.focus();
+  });
+}
+const num = v => Number(String(v ?? '').replace(/\s/g, '').replace(',', '.'));
+
+// ---- свои категории ----
+function renderCats() {
+  $('#catBody').innerHTML = ['out', 'in'].map(t => `
+    <section>
+      <h3>${t === 'out' ? 'Расходы' : 'Доходы'}</h3>
+      <ul class="cat-list">${S.cats[t].map(c => `<li><span>${esc(c)}</span><span class="acts">
+        <button class="link" type="button" data-cat-ren="${t}" data-name="${esc(c)}">переименовать</button>
+        <button class="link danger" type="button" data-cat-del="${t}" data-name="${esc(c)}">удалить</button></span></li>`).join('')}</ul>
+      <form class="cat-add" data-type="${t}">
+        <input name="name" placeholder="Новая категория" aria-label="Новая категория: ${t === 'out' ? 'расходы' : 'доходы'}" required>
+        <button class="ghost" type="submit">Добавить</button>
+      </form>
+    </section>`).join('');
+}
+function catsChanged() { save(); render(); syncSeg(); renderCats(); }
+function addCategory(type, name) {
+  name = name.trim();
+  if (!name) return null;
+  if (!S.cats[type].includes(name)) { S.cats[type].push(name); save(); syncSeg(); }
+  return name;
+}
+
 // ---- сохранение файлов: в браузере — загрузка, в десктопном приложении — диалог «Сохранить» ----
 const tauriInvoke = (cmd, args) => window.__TAURI__?.core?.invoke(cmd, args);
 
 function download(name, text, type) {
-  if (window.__TAURI__) { tauriInvoke('save_file', { name, text }).catch(err => alert('Не удалось сохранить: ' + err)); return; }
+  if (window.__TAURI__) { tauriInvoke('save_file', { name, text }).catch(err => toast('Не удалось сохранить: ' + err)); return; }
   const a = document.createElement('a');
   const url = URL.createObjectURL(new Blob([text], { type }));
   a.href = url; a.download = name; a.click();
@@ -285,6 +352,12 @@ function download(name, text, type) {
 document.addEventListener('click', e => {
   const t = e.target;
   const hit = sel => t.closest(sel);
+
+  const menu = $('#dataMenu');
+  if (menu.open && (!hit('.menu') || hit('.menu-pop button'))) menu.open = false;
+  if (hit('[data-close]')) return hit('dialog').close();
+  if (hit('#helpBtn')) return $('#helpDlg').showModal();
+  if (hit('#catsBtn')) { renderCats(); return $('#catDlg').showModal(); }
 
   if (hit('[data-view]')) { ui.view = hit('[data-view]').dataset.view; return render(); }
   const go = hit('[data-month-go]');
@@ -313,15 +386,20 @@ document.addEventListener('click', e => {
   }
   if (hit('#delMonth')) {
     const key = S.cur;
-    if (!confirm(`Удалить ${monthName(key)} со всеми записями? Это нельзя отменить.`)) return;
-    S.months = S.months.filter(k => k !== key);
-    S.items = S.items.filter(i => monthKey(i.date) !== key);
-    S.cur = [...S.months].sort().pop();
-    save(); return render();
+    ask({ title: `Удалить ${monthName(key)}?`, text: 'Все записи этого месяца будут удалены. Отменить это нельзя.', ok: 'Удалить', danger: true })
+      .then(r => {
+        if (!r) return;
+        S.months = S.months.filter(k => k !== key);
+        S.items = S.items.filter(i => monthKey(i.date) !== key);
+        S.cur = [...S.months].sort().pop();
+        save(); render();
+      });
+    return;
   }
-  if (hit('#editOpening')) {
-    const v = prompt('Остаток на начало первого месяца, ₽', S.opening);
-    if (v !== null && v.trim() !== '' && !isNaN(Number(v))) { S.opening = Number(v); save(); render(); }
+  if (hit('#editOpening') || hit('#obOpening')) {
+    ask({ title: 'Стартовый остаток', text: 'Сколько денег у вас на начало первого месяца. Дальше остаток считается сам.',
+          fields: [{ name: 'v', label: 'Сумма, ₽', type: 'number', value: S.opening }] })
+      .then(r => { if (r && !isNaN(num(r.v))) { S.opening = num(r.v); save(); render(); } });
     return;
   }
   const seg = hit('[data-type]');
@@ -336,35 +414,71 @@ document.addEventListener('click', e => {
   const lim = hit('[data-limit]');
   if (lim) {
     const c = lim.dataset.limit;
-    const v = prompt(`Лимит на «${c}» в месяц, ₽ (0 — убрать)`, S.limits[c] || '');
-    if (v === null) return;
-    const n = Number(v.replace(/\s/g, ''));
-    if (isNaN(n) || v.trim() === '') return;
-    if (n > 0) S.limits[c] = n; else delete S.limits[c];
-    save(); return render();
+    ask({ title: `Лимит: ${c}`, text: 'Сколько можно потратить на эту категорию за месяц. Ноль убирает лимит.',
+          fields: [{ name: 'v', label: 'Лимит в месяц, ₽', type: 'number', min: 0, value: S.limits[c] || '' }] })
+      .then(r => {
+        if (!r) return;
+        const n = num(r.v);
+        if (n > 0) S.limits[c] = n; else delete S.limits[c];
+        save(); render();
+      });
+    return;
   }
 
   if (hit('#newGoal')) {
-    const name = prompt('Название цели (например, «Новый ноутбук»)');
-    if (!name || !name.trim()) return;
-    const target = Number(String(prompt('Сумма цели, ₽') || '').replace(/\s/g, ''));
-    if (!(target > 0)) return;
-    const now = Date.now();
-    S.goals.push({ id: now, name: name.trim(), target, saved: 0 });
-    save(); return render();
+    ask({ title: 'Новая цель', text: 'На что вы копите и сколько для этого нужно.',
+          fields: [{ name: 'name', label: 'Название', placeholder: 'Например, новый ноутбук' },
+                   { name: 'target', label: 'Нужная сумма, ₽', type: 'number', min: 1 }], ok: 'Создать' })
+      .then(r => {
+        if (!r || !r.name.trim() || !(num(r.target) > 0)) return;
+        const now = Date.now();
+        S.goals.push({ id: now, name: r.name.trim(), target: num(r.target), saved: 0 });
+        save(); render();
+      });
+    return;
   }
   const ga = hit('[data-goal-add]');
   if (ga) {
     const g = S.goals.find(x => x.id === Number(ga.dataset.goalAdd));
     if (!g) return;
-    const n = Number(String(prompt(`Сколько отложить в «${g.name}», ₽`) || '').replace(/\s/g, ''));
-    if (n > 0) { g.saved += n; save(); render(); }
+    ask({ title: `Отложить в «${g.name}»`, fields: [{ name: 'v', label: 'Сколько отложить, ₽', type: 'number', min: 1 }], ok: 'Внести' })
+      .then(r => { if (r && num(r.v) > 0) { g.saved += num(r.v); save(); render(); } });
     return;
   }
   const gd = hit('[data-goal-del]');
   if (gd) {
     const g = S.goals.find(x => x.id === Number(gd.dataset.goalDel));
-    if (g && confirm(`Удалить цель «${g.name}»?`)) { S.goals = S.goals.filter(x => x !== g); save(); render(); }
+    if (!g) return;
+    ask({ title: `Удалить цель «${g.name}»?`, ok: 'Удалить', danger: true })
+      .then(r => { if (r) { S.goals = S.goals.filter(x => x !== g); save(); render(); } });
+    return;
+  }
+
+  const cr = hit('[data-cat-ren]');
+  if (cr) {
+    const t = cr.dataset.catRen, old = cr.dataset.name;
+    ask({ title: 'Переименовать категорию', text: 'Новое название заменится и в старых записях.',
+          fields: [{ name: 'name', label: 'Название', value: old }], ok: 'Переименовать' })
+      .then(r => {
+        const n = r && r.name.trim();
+        if (!n || n === old) return;
+        if (S.cats[t].includes(n)) return toast('Такая категория уже есть');
+        S.cats[t] = S.cats[t].map(x => x === old ? n : x);
+        S.items.forEach(i => { if (i.type === t && i.cat === old) i.cat = n; });
+        if (t === 'out' && S.limits[old] != null) { S.limits[n] = S.limits[old]; delete S.limits[old]; }
+        catsChanged();
+      });
+    return;
+  }
+  const cd = hit('[data-cat-del]');
+  if (cd) {
+    const t = cd.dataset.catDel, name = cd.dataset.name;
+    if (S.cats[t].length <= 1) return toast('Нужна хотя бы одна категория');
+    const used = S.items.filter(i => i.type === t && i.cat === name).length;
+    ask({ title: `Удалить категорию «${name}»?`,
+          text: (used ? `Записи с ней (${used}) останутся, название сохранится. ` : '') + 'Из списка выбора категория пропадёт.',
+          ok: 'Удалить', danger: true })
+      .then(r => { if (r) { S.cats[t] = S.cats[t].filter(x => x !== name); catsChanged(); } });
     return;
   }
 
@@ -375,7 +489,7 @@ document.addEventListener('click', e => {
   if (hit('#importTable')) return openImport();
 
   if (hit('#theme')) return toggleTheme();
-  if (hit('#fab')) { $('#quick [name=amount]').scrollIntoView({ block: 'center' }); $('#quick [name=amount]').focus(); return; }
+  if (hit('#fab') || hit('#obAdd')) { $('#quick [name=amount]').scrollIntoView({ block: 'center' }); $('#quick [name=amount]').focus(); return; }
 });
 
 document.addEventListener('keydown', e => {
@@ -396,6 +510,20 @@ document.addEventListener('keydown', e => {
   }
 });
 
+// «+ Своя категория…» в любом списке категорий
+document.addEventListener('change', e => {
+  const sel = e.target;
+  if (!(sel instanceof HTMLSelectElement) || sel.value !== '__new__') return;
+  const type = sel.id === 'eCat' ? ef.type.value : ui.type;
+  ask({ title: 'Новая категория', text: type === 'in' ? 'Для доходов.' : 'Для расходов.',
+        fields: [{ name: 'name', label: 'Название', placeholder: 'Например, питомцы' }], ok: 'Добавить' })
+    .then(r => {
+      const name = r && addCategory(type, r.name);
+      fillCats(sel, type, name || undefined);
+      if (!name) sel.selectedIndex = 0;
+    });
+});
+
 let qTimer = null;
 $('#q').addEventListener('input', e => {
   clearTimeout(qTimer);
@@ -410,7 +538,7 @@ $('#quick').addEventListener('submit', e => {
   if (!(amount > 0)) return f.amount.focus();
   const date = f.date.value || localDate();
   const now = Date.now();
-  S.items.push({ id: now, t: now, type: ui.type, date, title: f.title.value.trim(), cat: f.cat.value, amount, rep: f.rep.checked });
+  S.items.push({ id: now, t: now, type: ui.type, date, title: f.title.value.trim(), cat: f.cat.value === '__new__' ? S.cats[ui.type][0] : f.cat.value, amount, rep: f.rep.checked });
   ensureMonth(monthKey(date));
   S.cur = monthKey(date);
   save();
@@ -446,7 +574,7 @@ ef.addEventListener('submit', e => {
   it.type = ef.type.value;
   it.amount = Number(ef.amount.value);
   it.title = ef.title.value.trim();
-  it.cat = $('#eCat').value;
+  it.cat = $('#eCat').value === '__new__' ? S.cats[it.type][0] : $('#eCat').value;
   it.date = ef.date.value;
   it.note = ef.note.value.trim();
   it.rep = ef.rep.checked;
@@ -480,16 +608,13 @@ $('#file').addEventListener('change', async e => {
     importText(await f.text());
     toast('Данные восстановлены из копии');
   } catch (err) {
-    alert('Этот файл не похож на копию бюджета.');
+    toast('Этот файл не похож на копию бюджета.');
   }
 });
 function importText(text) {
   const s = JSON.parse(text);
   if (!Array.isArray(s.items) || !Array.isArray(s.months) || typeof s.opening !== 'number') throw new Error('bad');
-  S = s;
-  S.limits = S.limits || {};
-  S.goals = S.goals || [];
-  S.reminders = S.reminders || [];
+  S = normalize(s);
   if (!S.months.includes(S.cur)) S.cur = [...S.months].sort().pop();
   save(); render();
 }
@@ -557,7 +682,7 @@ function remindersHTML() {
         <button class="link" type="button" data-rem-done="${r.id}">готово</button>
         <button class="link danger" type="button" data-rem-del="${r.id}">удалить</button>
       </div></div>`).join('') : '<p class="empty">Напоминаний нет.</p>';
-  return `<section><h3>Напоминания</h3>${rows}
+  return `<section class="widget"><h3>Напоминания</h3><p class="wh">Уведомление придёт в назначенное время.</p>${rows}
     <form class="rem-form" id="remForm" autocomplete="off">
       <input name="title" placeholder="Что напомнить, например «Оплатить интернет»" aria-label="Текст напоминания" required>
       <div class="row2">
@@ -569,6 +694,12 @@ function remindersHTML() {
     </form></section>`;
 }
 document.addEventListener('submit', e => {
+  if (e.target.matches('.cat-add')) {
+    e.preventDefault();
+    const f = e.target;
+    if (addCategory(f.dataset.type, f.name.value)) { renderCats(); f.querySelector('input')?.focus(); }
+    return;
+  }
   if (e.target.id !== 'remForm') return;
   e.preventDefault();
   const f = e.target;

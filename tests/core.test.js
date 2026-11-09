@@ -24,3 +24,71 @@ test('fmtMoney: копейки показываются', () => assert.equal(n(C
 test('fmtMoney: пять копеек', () => assert.equal(n(Core.fmtMoney(5)), '0,05'));
 test('fmtMoney: минус', () => assert.equal(n(Core.fmtMoney(-150000)), '−1 500'));
 test('money: со знаком рубля', () => assert.equal(n(Core.money(150000)), '1 500 ₽'));
+
+// ---- Перенос v1 → v2 ----
+const demo = () => JSON.parse(require('node:fs').readFileSync(require('node:path').join(__dirname, 'fixtures', 'v1-demo.json'), 'utf8'));
+
+test('migrate: v1 → v2, суммы ×100, счёт «Основной»', () => {
+  const v1 = {
+    opening: 800, cur: '2026-11', months: ['2026-11'],
+    items: [{ id: 1, t: 1, type: 'in', date: '2026-11-06', title: 'ЗП', cat: 'Зарплата', amount: 4400.5 }],
+    limits: { 'Еда': 20000 }, goals: [{ id: 5, name: 'Отпуск', target: 120000, saved: 45000 }]
+  };
+  const s = Core.migrate(v1);
+  assert.equal(s.version, 2);
+  assert.deepEqual(s.accounts, [{ id: 1, name: 'Основной', opening: 80000 }]);
+  assert.equal(s.items[0].amount, 440050);
+  assert.equal(s.items[0].account, 1);
+  assert.equal(s.limits['Еда'], 2000000);
+  assert.equal(s.goals[0].target, 12000000);
+  assert.equal(s.goals[0].saved, 4500000);
+  assert.equal('opening' in s, false);
+});
+test('migrate: идемпотентен', () => {
+  const once = Core.migrate(demo());
+  assert.deepEqual(Core.migrate(once), once);
+});
+test('migrate: не меняет исходный объект', () => {
+  const v1 = demo(); const copy = JSON.parse(JSON.stringify(v1));
+  Core.migrate(v1);
+  assert.deepEqual(v1, copy);
+});
+test('migrate: неизвестные поля сохраняются', () => {
+  const v1 = demo(); v1.foo = 1; v1.items[0].bar = 2;
+  const s = Core.migrate(v1);
+  assert.equal(s.foo, 1);
+  assert.equal(s.items[0].bar, 2);
+});
+test('migrate: минимальные старые данные не роняют перенос', () => {
+  const s = Core.migrate({ opening: 0, months: ['2026-11'], items: [
+    { id: 1, t: 1, type: 'out', date: '2026-12-02', title: 'x', cat: 'Еда', amount: 10 }] });
+  assert.deepEqual(s.limits, {});
+  assert.deepEqual(s.goals, []);
+  assert.deepEqual(s.reminders, []);
+  assert.deepEqual(s.cats, Core.DEFAULT_CATS);
+  assert.deepEqual(s.months, ['2026-11', '2026-12']);
+  assert.equal(s.items.length, 1);
+  assert.equal('rep' in s.items[0], false);
+  assert.equal(s.cur, '2026-12');
+});
+test('migrate: мусор бросает bad data', () => {
+  assert.throws(() => Core.migrate({}), /bad data/);
+  assert.throws(() => Core.migrate({ items: [] }), /bad data/);
+  assert.throws(() => Core.migrate(null), /bad data/);
+});
+test('migrate: демо-данные сохраняют итоговые суммы', () => {
+  const v1 = demo();
+  const sum = v1.items.reduce((a, i) => a + (i.type === 'in' ? i.amount : -i.amount), v1.opening);
+  const s = Core.migrate(v1);
+  const kop = s.items.reduce((a, i) => a + (i.type === 'in' ? i.amount : -i.amount), s.accounts[0].opening);
+  assert.equal(kop, Math.round(sum * 100));
+});
+test('emptyState: один счёт и стандартные категории', () => {
+  const s = Core.emptyState('2026-11');
+  assert.equal(s.version, 2);
+  assert.deepEqual(s.accounts, [{ id: 1, name: 'Основной', opening: 0 }]);
+  assert.deepEqual(s.cats, Core.DEFAULT_CATS);
+  assert.deepEqual(s.months, ['2026-11']);
+  assert.equal(s.cur, '2026-11');
+  assert.deepEqual(s.items, []);
+});

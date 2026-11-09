@@ -271,16 +271,16 @@ function syncSeg() {
 }
 
 // ---- уведомления и отмена ----
-function toast(msg, action) {
+function toast(msg, action, label = 'Отменить', ttl = 6000) {
   document.querySelector('.toast')?.remove();
   clearTimeout(toastTimer);
   const el = document.createElement('div');
   el.className = 'toast';
   el.setAttribute('role', 'status');
-  el.innerHTML = `<span>${esc(msg)}</span>${action ? '<button type="button">Отменить</button>' : ''}`;
+  el.innerHTML = `<span>${esc(msg)}</span>${action ? `<button type="button">${esc(label)}</button>` : ''}`;
   if (action) el.querySelector('button').addEventListener('click', () => { el.remove(); action(); });
   document.body.appendChild(el);
-  toastTimer = setTimeout(() => el.remove(), 6000);
+  toastTimer = setTimeout(() => el.remove(), ttl);
 }
 function removeItem(id) {
   const idx = S.items.findIndex(i => i.id === id);
@@ -356,6 +356,7 @@ document.addEventListener('click', e => {
   const menu = $('#dataMenu');
   if (menu.open && (!hit('.menu') || hit('.menu-pop button'))) menu.open = false;
   if (hit('[data-close]')) return hit('dialog').close();
+  if (hit('#updBtn')) return checkUpdate(true);
   if (hit('#helpBtn')) return $('#helpDlg').showModal();
   if (hit('#catsBtn')) { renderCats(); return $('#catDlg').showModal(); }
 
@@ -900,6 +901,36 @@ $('#impCancel').addEventListener('click', () => $('#impDlg').close());
 
 // ---- уведомления из приложения ----
 if (window.__TAURI__?.event) window.__TAURI__.event.listen('reminder-fired', e => reminderDone(e.payload));
+
+// ---- обновления (только в десктопном приложении) ----
+let updating = false;
+async function checkUpdate(manual = false) {
+  const T = window.__TAURI__;
+  if (!T?.updater || updating) return;
+  try {
+    const u = await T.updater.check();
+    if (!u) { if (manual) toast('У вас последняя версия'); return; }
+    toast(`Доступна версия ${u.version}`, async () => {
+      updating = true;
+      toast('Скачиваю обновление. Приложение перезапустится само.', null, '', 120000);
+      try {
+        await u.downloadAndInstall();
+        await T.process.relaunch();
+      } catch (err) {
+        updating = false;
+        toast('Не удалось обновить: ' + err);
+      }
+    }, 'Обновить', 60000);
+  } catch (err) {
+    if (manual) toast('Не удалось проверить обновления. Проверьте интернет.');
+  }
+}
+if (window.__TAURI__?.updater) {
+  $('#updBtn').hidden = false;
+  window.__TAURI__.app?.getVersion().then(v => { $('#verText').textContent = 'Версия приложения: ' + v; }).catch(() => {});
+  setTimeout(checkUpdate, 5000);
+  setInterval(checkUpdate, 6 * 3600 * 1000);
+}
 
 // init
 const isMac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);

@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Budget",
-  "version": "1.0.1",
+  "version": "1.1.0",
   "identifier": "ru.nemira.budget",
   "build": {
     "frontendDist": "../web"
@@ -50,6 +50,18 @@
       },
       "wix": {
         "language": "ru-RU"
+      }
+    },
+    "createUpdaterArtifacts": true
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDFCRjVDMDUwRkFFNTkzNjYKUldSbWsrWDZVTUQxRzJBR242a3lWcnRoUTFzVjM1eFRnMHBMV0JnbXY5T1pCc1FhUmZWTkJibDMK",
+      "endpoints": [
+        "https://github.com/nemira-dodep/budget/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
       }
     }
   }

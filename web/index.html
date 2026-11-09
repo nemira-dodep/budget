@@ -33,6 +33,7 @@
             <button type="button" id="exportCsv">Сохранить в CSV</button>
             <button type="button" id="backup">Сохранить копию</button>
             <button type="button" id="restore">Загрузить копию</button>
+            <button type="button" id="updBtn" hidden>Проверить обновления</button>
           </div>
         </details>
         <button class="ghost" id="helpBtn" type="button" aria-label="Как это работает" title="Как это работает">?</button>
@@ -138,6 +139,7 @@
     <li><b>Данные.</b> Все хранится на вашем компьютере. Меню «Данные» сохраняет копию, CSV и загружает таблицы.</li>
   </ol>
   <p class="dlg-text"><kbd>N</kbd> новая запись · <kbd>⌘K</kbd> поиск · <kbd>←</kbd> <kbd>→</kbd> переключить месяц</p>
+  <p class="dlg-text" id="verText"></p>
   <div class="dlg-actions">
     <button type="button" class="primary" data-close>Понятно</button>
   </div>

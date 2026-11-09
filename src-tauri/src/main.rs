@@ -68,6 +68,8 @@ async fn open_table() -> Result<Option<Table>, String> {
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .invoke_handler(tauri::generate_handler![sync_reminders, save_file, open_table])
         .setup(|app| {
             app.manage(Store::default());

@@ -1,7 +1,6 @@
 // Бюджет: нативные диалоги, напоминания с уведомлениями, значок в трее.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-#[allow(dead_code)]
 mod data;
 
 use std::collections::HashSet;
@@ -68,12 +67,123 @@ async fn open_table() -> Result<Option<Table>, String> {
     Ok(Some(Table { name, bytes }))
 }
 
+// ---- Данные: файл, копии, настройки ----
+
+#[derive(serde::Serialize)]
+struct LoadResult {
+    status: &'static str,
+    text: Option<String>,
+}
+
+#[derive(serde::Serialize)]
+struct BackupStatus {
+    dir: String,
+    fallback: bool,
+}
+
+fn app_dir(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
+    let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    Ok(dir)
+}
+
+fn backup_dirs(app: &tauri::AppHandle) -> Result<(std::path::PathBuf, bool), String> {
+    let base = app_dir(app)?;
+    let settings = data::load_settings(&base.join("settings.json"));
+    Ok(data::effective_backup_dir(&base.join("backups"), &settings))
+}
+
+/// Копия за сегодня (если её ещё нет) и очистка старых.
+fn daily_backup(app: &tauri::AppHandle) {
+    let Ok(base) = app_dir(app) else { return };
+    let Ok((dir, _)) = backup_dirs(app) else { return };
+    let today = chrono::Local::now().date_naive();
+    if data::ensure_daily_backup(&base.join("data.json"), &dir, today).unwrap_or(false) {
+        let _ = data::prune_backups(&dir, today, 30);
+    }
+}
+
+#[tauri::command]
+fn load_data(app: tauri::AppHandle) -> Result<LoadResult, String> {
+    let path = app_dir(&app)?.join("data.json");
+    match data::load_data_file(&path).map_err(|e| e.to_string())? {
+        data::Loaded::None => Ok(LoadResult { status: "none", text: None }),
+        data::Loaded::Broken => Ok(LoadResult { status: "broken", text: None }),
+        data::Loaded::Ok(text) => {
+            daily_backup(&app);
+            Ok(LoadResult { status: "ok", text: Some(text) })
+        }
+    }
+}
+
+#[tauri::command]
+fn save_data(app: tauri::AppHandle, text: String) -> Result<(), String> {
+    serde_json::from_str::<serde_json::Value>(&text).map_err(|_| "Данные не похожи на JSON".to_string())?;
+    let path = app_dir(&app)?.join("data.json");
+    data::atomic_write(&path, &text).map_err(|e| e.to_string())?;
+    daily_backup(&app);
+    Ok(())
+}
+
+#[tauri::command]
+fn restore_latest_backup(app: tauri::AppHandle) -> Result<String, String> {
+    let base = app_dir(&app)?;
+    let (dir, _) = backup_dirs(&app)?;
+    let mut dirs = vec![dir];
+    dirs.push(base.join("backups"));
+    data::restore_from_backup(&base.join("data.json"), &dirs)
+}
+
+#[tauri::command]
+fn backup_status(app: tauri::AppHandle) -> Result<BackupStatus, String> {
+    let (dir, fallback) = backup_dirs(&app)?;
+    Ok(BackupStatus { dir: dir.to_string_lossy().into_owned(), fallback })
+}
+
+#[tauri::command]
+async fn choose_backup_dir(app: tauri::AppHandle) -> Result<Option<String>, String> {
+    let Some(folder) = rfd::AsyncFileDialog::new().pick_folder().await else {
+        return Ok(None);
+    };
+    let dir = folder.path().to_string_lossy().into_owned();
+    let path = app_dir(&app)?.join("settings.json");
+    let settings = data::Settings { backup_dir: Some(dir.clone()) };
+    data::save_settings(&path, &settings).map_err(|e| e.to_string())?;
+    daily_backup(&app);
+    Ok(Some(dir))
+}
+
+#[tauri::command]
+fn open_backup_dir(app: tauri::AppHandle) -> Result<(), String> {
+    let (dir, _) = backup_dirs(&app)?;
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let opener = if cfg!(target_os = "macos") {
+        "open"
+    } else if cfg!(target_os = "windows") {
+        "explorer"
+    } else {
+        "xdg-open"
+    };
+    std::process::Command::new(opener).arg(&dir).spawn().map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Интерфейс сохранил данные и просит закрыть приложение.
+#[tauri::command]
+fn quit_app(app: tauri::AppHandle) {
+    app.exit(0);
+}
+
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
-        .invoke_handler(tauri::generate_handler![sync_reminders, save_file, open_table])
+        .invoke_handler(tauri::generate_handler![
+            sync_reminders, save_file, open_table,
+            load_data, save_data, restore_latest_backup, backup_status,
+            choose_backup_dir, open_backup_dir, quit_app
+        ])
         .setup(|app| {
             app.manage(Store::default());
             let _ = app.notification().request_permission();
@@ -92,7 +202,15 @@ fn main() {
                             let _ = w.set_focus();
                         }
                     }
-                    "quit" => app.exit(0),
+                    "quit" => {
+                        // Просим интерфейс сохранить данные; если он не ответил, выходим сами.
+                        let _ = app.emit("before-quit", ());
+                        let handle = app.clone();
+                        std::thread::spawn(move || {
+                            std::thread::sleep(Duration::from_millis(1500));
+                            handle.exit(0);
+                        });
+                    }
                     _ => {}
                 })
                 .build(app)?;

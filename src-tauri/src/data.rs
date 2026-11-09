@@ -136,6 +136,39 @@ pub fn effective_backup_dir(default: &Path, s: &Settings) -> (PathBuf, bool) {
     }
 }
 
+// ---- Восстановление ----
+
+/// Текст самой свежей копии с корректным JSON в папке (файлы не вида `budget-ГГГГ-ММ-ДД.json` пропускаются).
+pub fn latest_valid_backup(dir: &Path) -> Option<String> {
+    let mut found: Vec<(chrono::NaiveDate, PathBuf)> = fs::read_dir(dir)
+        .ok()?
+        .flatten()
+        .filter_map(|e| backup_date(&e.file_name().to_string_lossy()).map(|d| (d, e.path())))
+        .collect();
+    found.sort_by(|a, b| b.0.cmp(&a.0));
+    found.into_iter().find_map(|(_, p)| {
+        fs::read_to_string(p)
+            .ok()
+            .filter(|t| serde_json::from_str::<serde_json::Value>(t).is_ok())
+    })
+}
+
+/// Ставит `data.json` из последней рабочей копии в списке папок. Старый файл, если он есть,
+/// остаётся рядом как `data.json.broken`. Без копий возвращает ошибку и ничего не меняет.
+pub fn restore_from_backup(data: &Path, dirs: &[PathBuf]) -> Result<String, String> {
+    let text = dirs
+        .iter()
+        .find_map(|d| latest_valid_backup(d))
+        .ok_or_else(|| "Копий не найдено".to_string())?;
+    if data.exists() {
+        let broken = sibling(data, ".broken");
+        let _ = fs::remove_file(&broken);
+        fs::rename(data, &broken).map_err(|e| e.to_string())?;
+    }
+    atomic_write(data, &text).map_err(|e| e.to_string())?;
+    Ok(text)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -307,5 +340,51 @@ mod backup_tests {
         let (dir, fb) = effective_backup_dir(&default, &s);
         assert_eq!(dir, default);
         assert!(fb);
+    }
+}
+
+#[cfg(test)]
+mod restore_tests {
+    use super::*;
+    use std::fs;
+    use tempfile::tempdir;
+
+    #[test]
+    fn latest_valid_backup_skips_broken_and_foreign_files() {
+        let d = tempdir().unwrap();
+        fs::write(d.path().join("budget-2026-11-01.json"), "{\"v\":1}").unwrap();
+        fs::write(d.path().join("budget-2026-11-05.json"), "{\"v\":5}").unwrap();
+        fs::write(d.path().join("budget-2026-11-09.json"), "{\"v\":").unwrap();
+        fs::write(d.path().join("budget-zzz.json"), "{\"v\":99}").unwrap();
+        assert_eq!(latest_valid_backup(d.path()).unwrap(), "{\"v\":5}");
+    }
+
+    #[test]
+    fn latest_valid_backup_none_when_empty_or_missing() {
+        let d = tempdir().unwrap();
+        assert!(latest_valid_backup(d.path()).is_none());
+        assert!(latest_valid_backup(&d.path().join("none")).is_none());
+    }
+
+    #[test]
+    fn restore_keeps_existing_file_as_broken() {
+        let d = tempdir().unwrap();
+        let data = d.path().join("data.json");
+        fs::write(&data, "{\"bad\":").unwrap();
+        let bk = d.path().join("backups");
+        fs::create_dir_all(&bk).unwrap();
+        fs::write(bk.join("budget-2026-11-05.json"), "{\"v\":5}").unwrap();
+        assert_eq!(restore_from_backup(&data, &[bk]).unwrap(), "{\"v\":5}");
+        assert_eq!(fs::read_to_string(&data).unwrap(), "{\"v\":5}");
+        assert_eq!(fs::read_to_string(d.path().join("data.json.broken")).unwrap(), "{\"bad\":");
+    }
+
+    #[test]
+    fn restore_without_backups_is_error_and_keeps_file() {
+        let d = tempdir().unwrap();
+        let data = d.path().join("data.json");
+        fs::write(&data, "{\"keep\":1}").unwrap();
+        assert!(restore_from_backup(&data, &[d.path().join("none")]).is_err());
+        assert_eq!(fs::read_to_string(&data).unwrap(), "{\"keep\":1}");
     }
 }

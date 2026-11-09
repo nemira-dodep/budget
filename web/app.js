@@ -1,5 +1,3 @@
-const KEY = 'budget.v2';          // данные v2 в браузере
-const LEGACY_KEY = 'budget.v1';    // старые данные: только читаем, не трогаем
 const THEME_KEY = 'budget.theme';
 const $ = s => document.querySelector(s);
 const { fmtMoney: fmt, money, monthKey, nextKey, daysIn, localDate } = Core;
@@ -19,18 +17,11 @@ const store = {
   set(k, v) { try { localStorage.setItem(k, v); } catch (e) {} }
 };
 
-let S = load();
+let S = null;   // заполняется в start() после чтения данных
 const ui = { type: 'out', q: '', filter: 'all', view: 'month' };
 let undo = null, toastTimer = null;
 
-function load() {
-  try {
-    const raw = store.get(KEY) || store.get(LEGACY_KEY);
-    if (raw) return Core.migrate(JSON.parse(raw));
-  } catch (e) {}
-  return Core.emptyState(localDate().slice(0, 7));
-}
-function save() { store.set(KEY, JSON.stringify(S)); syncReminders(); }
+function save() { Storage.save(S); syncReminders(); }
 function ensureMonth(key) { if (!S.months.includes(key)) S.months.push(key); }
 
 const calc = () => Core.calc(S);
@@ -309,6 +300,12 @@ document.addEventListener('click', e => {
   if (menu.open && (!hit('.menu') || hit('.menu-pop button'))) menu.open = false;
   if (hit('[data-close]')) return hit('dialog').close();
   if (hit('#updBtn')) return checkUpdate(true);
+  if (hit('#backupDirBtn')) {
+    tauriInvoke('choose_backup_dir').then(dir => { if (dir) toast('Папка копий: ' + dir, null, '', 8000); })
+      .catch(err => toast('Не удалось выбрать папку: ' + err));
+    return;
+  }
+  if (hit('#openBackupBtn')) { tauriInvoke('open_backup_dir').catch(err => toast('Не удалось открыть папку: ' + err)); return; }
   if (hit('#helpBtn')) return $('#helpDlg').showModal();
   if (hit('#catsBtn')) { renderCats(); return $('#catDlg').showModal(); }
 
@@ -797,7 +794,7 @@ if (window.__TAURI__?.updater) {
   setInterval(checkUpdate, 6 * 3600 * 1000);
 }
 
-// init
+// ---- запуск ----
 const isMac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
 if (!isMac) {
   document.querySelectorAll('kbd, #q').forEach(el => {
@@ -806,9 +803,41 @@ if (!isMac) {
   });
 }
 applyTheme(store.get(THEME_KEY) || (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark'));
-$('#quick [name=date]').value = localDate();
-syncSeg();
-render();
-syncReminders();
-checkWeb();
-setInterval(checkWeb, 30000);
+Storage.onError = err => toast('Не удалось сохранить данные: ' + err, null, '', 15000);
+document.addEventListener('visibilitychange', () => { if (document.hidden) Storage.flush(); });
+addEventListener('pagehide', () => Storage.flush());
+if (window.__TAURI__?.event) {
+  window.__TAURI__.event.listen('before-quit', async () => { await Storage.flush(); tauriInvoke('quit_app'); });
+}
+
+// Файл данных повреждён: предлагаем последнюю копию, повреждённый файл остаётся как data.json.broken
+async function recoverBroken() {
+  const r = await ask({ title: 'Файл данных повреждён',
+    text: 'Он сохранён рядом как data.json.broken. Можно восстановить данные из последней копии.',
+    ok: 'Восстановить из копии' });
+  if (r) {
+    try { return Core.migrate(JSON.parse(await tauriInvoke('restore_latest_backup'))); }
+    catch (err) { toast('Копий не найдено. Начинаем с пустого бюджета.', null, '', 10000); }
+  }
+  return Core.emptyState(localDate().slice(0, 7));
+}
+
+async function start() {
+  const r = await Storage.load(localDate().slice(0, 7));
+  S = r.broken ? await recoverBroken() : r.state;
+  if (r.broken) save();
+  $('#quick [name=date]').value = localDate();
+  syncSeg();
+  render();
+  syncReminders();
+  checkWeb();
+  setInterval(checkWeb, 30000);
+  if (window.__TAURI__) {
+    $('#backupDirBtn').hidden = false;
+    $('#openBackupBtn').hidden = false;
+    Storage.backupInfo().then(i => {
+      if (i && i.fallback) toast('Выбранная папка копий недоступна. Копии идут в папку приложения.', null, '', 10000);
+    });
+  }
+}
+start();

@@ -55,7 +55,7 @@
       version: 2,
       accounts: [{ id: 1, name: 'Основной', opening: 0 }],
       cats: { in: [...DEFAULT_CATS.in], out: [...DEFAULT_CATS.out] },
-      limits: {}, goals: [], reminders: [],
+      limits: {}, goals: [], reminders: [], rules: {},
       months: [key], cur: key, items: []
     };
   }
@@ -79,6 +79,7 @@
     s.limits = s.limits || {};
     s.goals = s.goals || [];
     s.reminders = s.reminders || [];
+    s.rules = s.rules || {};
     s.accounts.forEach(a => { a.opening = intOf(a.opening ?? 0); });
     s.items.forEach(i => { i.amount = intOf(i.amount); });
     Object.keys(s.limits).forEach(k => { s.limits[k] = intOf(s.limits[k]); });
@@ -139,18 +140,36 @@
     S.accounts[0].opening += total - openingTotal(S);
   }
 
-  // Новые записи для импорта: дубли (дата, тип, описание, сумма) пропускаются, в том числе внутри самого импорта
+  // Новые записи для импорта. Без времени: дубли (дата, тип, описание, сумма) пропускаются, в том числе
+  // внутри самого импорта. Со временем (банковская выписка): считаем вхождения, поэтому две одинаковые
+  // операции в одну минуту остаются двумя, а повторная загрузка пропускает ровно столько, сколько уже есть.
   function splitNewItems(existing, incoming) {
     const key = i => `${i.date}|${i.type}|${i.title}|${i.amount}`;
+    const tkey = i => `${i.date}|${i.time}|${i.type}|${i.title}|${i.amount}`;
     const seen = new Set(existing.map(key));
+    const have = new Map();
+    existing.filter(i => i.time).forEach(i => have.set(tkey(i), (have.get(tkey(i)) || 0) + 1));
+    const got = new Map();
     const fresh = [];
     let skipped = 0;
     incoming.forEach(i => {
-      const k = key(i);
-      if (seen.has(k)) skipped++;
-      else { seen.add(k); fresh.push(i); }
+      if (i.time) {
+        const k = tkey(i);
+        const n = (got.get(k) || 0) + 1;
+        got.set(k, n);
+        if (n <= (have.get(k) || 0)) skipped++; else fresh.push(i);
+      } else {
+        const k = key(i);
+        if (seen.has(k)) skipped++; else { seen.add(k); fresh.push(i); }
+      }
     });
     return { fresh, skipped };
+  }
+
+  // Общий остаток на конец указанного дня (переводы между счетами не влияют)
+  function balanceOn(S, date) {
+    return S.items.filter(i => i.date <= date).reduce(
+      (a, i) => a + (i.type === 'in' ? i.amount : i.type === 'out' ? -i.amount : 0), openingTotal(S));
   }
 
   function canDeleteAccount(S, id) {
@@ -257,5 +276,5 @@
     return { items, months: [...months].sort(), opening };
   }
 
-  return { parseMoney, fmtMoney, money, DEFAULT_CATS, emptyState, migrate, monthKey, nextKey, daysIn, calc, accountBalances, canDeleteAccount, setOpeningTotal, splitNewItems, parseSheet, guessCat, localDate, applyEdit };
+  return { parseMoney, fmtMoney, money, DEFAULT_CATS, emptyState, migrate, monthKey, nextKey, daysIn, calc, accountBalances, canDeleteAccount, setOpeningTotal, splitNewItems, balanceOn, parseSheet, guessCat, localDate, applyEdit };
 });

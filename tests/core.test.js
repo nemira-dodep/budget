@@ -285,3 +285,44 @@ test('splitNewItems: дубли пропускаются, в том числе �
   assert.equal(r.fresh.length, 2);
   assert.equal(r.skipped, 2);
 });
+
+// ---- Банковская выписка: время в дублях, остаток на дату, правила ----
+const timed = (time, extra = {}) => ({ date: '2026-11-09', time, type: 'out', title: 'Оплата в SHOP', amount: 15600, ...extra });
+test('splitNewItems: две одинаковые операции со временем при пустой базе загружаются обе', () => {
+  const r = Core.splitNewItems([], [timed('10:00'), timed('10:00')]);
+  assert.equal(r.fresh.length, 2);
+  assert.equal(r.skipped, 0);
+});
+test('splitNewItems: повторная загрузка тех же двух пропускает обе', () => {
+  const r = Core.splitNewItems([timed('10:00'), timed('10:00')], [timed('10:00'), timed('10:00')]);
+  assert.equal(r.fresh.length, 0);
+  assert.equal(r.skipped, 2);
+});
+test('splitNewItems: дозагрузка третьей берёт только её', () => {
+  const r = Core.splitNewItems([timed('10:00'), timed('10:00')], [timed('10:00'), timed('10:00'), timed('10:00')]);
+  assert.equal(r.fresh.length, 1);
+  assert.equal(r.skipped, 2);
+});
+test('splitNewItems: разное время не дубль', () => {
+  const r = Core.splitNewItems([timed('10:00')], [timed('10:01')]);
+  assert.equal(r.fresh.length, 1);
+});
+test('splitNewItems: записи без времени как раньше', () => {
+  const a = { date: '2026-11-09', type: 'out', title: 'x', amount: 5 };
+  const r = Core.splitNewItems([a], [a, { ...a, amount: 6 }, { ...a, amount: 6 }]);
+  assert.equal(r.fresh.length, 1);
+  assert.equal(r.skipped, 2);
+});
+test('balanceOn: остаток на конец дня, перевод не влияет', () => {
+  const s = base();
+  assert.equal(Core.balanceOn(s, '2026-11-02'), 150000);
+  assert.equal(Core.balanceOn(s, '2026-11-03'), 180000);
+  assert.equal(Core.balanceOn(s, '2026-11-09'), 170000);
+  assert.equal(Core.balanceOn(s, '2026-11-10'), 170000);
+  assert.equal(Core.balanceOn(s, '2026-12-02'), 165000);
+});
+test('migrate: поле rules по умолчанию и сохраняется', () => {
+  assert.deepEqual(Core.migrate({ opening: 0, months: ['2026-11'], items: [] }).rules, {});
+  assert.deepEqual(Core.migrate({ opening: 0, months: ['2026-11'], items: [], rules: { magnit: 'Еда' } }).rules, { magnit: 'Еда' });
+  assert.deepEqual(Core.emptyState('2026-11').rules, {});
+});

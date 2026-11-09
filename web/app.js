@@ -101,8 +101,8 @@ function curve(m) {
   const zero = y(0).toFixed(1);
   return `<svg class="chart" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label="Остаток по записям за месяц">
     <line x1="0" x2="${W}" y1="${zero}" y2="${zero}" stroke="var(--rule)" stroke-dasharray="4 6" vector-effect="non-scaling-stroke"/>
-    <polygon points="${x(0).toFixed(1)},${zero} ${line} ${x(pts.length - 1).toFixed(1)},${zero}" fill="var(--gold)" opacity=".12"/>
-    <polyline points="${line}" fill="none" stroke="var(--gold)" stroke-width="2.5" vector-effect="non-scaling-stroke" stroke-linejoin="round"/>
+    <polygon points="${x(0).toFixed(1)},${zero} ${line} ${x(pts.length - 1).toFixed(1)},${zero}" fill="var(--line)" opacity=".14"/>
+    <polyline points="${line}" fill="none" stroke="var(--line)" stroke-width="2.5" vector-effect="non-scaling-stroke" stroke-linejoin="round"/>
   </svg>`;
 }
 

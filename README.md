@@ -54,6 +54,7 @@ web/                 интерфейс (HTML, CSS, JS без сборки)
   index.html
   style.css
   app.js
+  fonts/             Onest и Unbounded (woff2, офлайн)
   vendor/            SheetJS для импорта таблиц (подгружается только при импорте)
 src-tauri/           оболочка: окно, трей, уведомления, диалоги файлов
   src/main.rs
@@ -75,4 +76,4 @@ git push --tags
 
 ## Лицензия
 
-[MIT](LICENSE). Библиотека [SheetJS Community Edition](https://sheetjs.com) в `web/vendor` распространяется по лицензии Apache-2.0.
+[MIT](LICENSE). Библиотека [SheetJS Community Edition](https://sheetjs.com) в `web/vendor` распространяется по лицензии Apache-2.0. Шрифты [Onest](https://fonts.google.com/specimen/Onest) и [Unbounded](https://fonts.google.com/specimen/Unbounded) в `web/fonts` — по лицензии SIL OFL 1.1.

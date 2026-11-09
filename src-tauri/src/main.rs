@@ -1,6 +1,9 @@
 // Бюджет: нативные диалоги, напоминания с уведомлениями, значок в трее.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+#[allow(dead_code)]
+mod data;
+
 use std::collections::HashSet;
 use std::sync::Mutex;
 use std::time::Duration;

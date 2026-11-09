@@ -677,6 +677,34 @@ function loadXlsx() {
   });
   return xlsxPromise;
 }
+// pdf.js (~1,4 МБ) тоже грузим только при импорте PDF
+let pdfPromise = null;
+function loadPdfJs() {
+  if (window.pdfjsLib) return Promise.resolve();
+  pdfPromise = pdfPromise || new Promise((ok, fail) => {
+    const s = document.createElement('script');
+    s.src = 'vendor/pdfjs/pdf.min.js';
+    s.onload = () => { pdfjsLib.GlobalWorkerOptions.workerSrc = 'vendor/pdfjs/pdf.worker.min.js'; ok(); };
+    s.onerror = () => { pdfPromise = null; fail(new Error('Не удалось загрузить модуль чтения PDF')); };
+    document.head.appendChild(s);
+  });
+  return pdfPromise;
+}
+// PDF → плоский список текста с координатами для Statement.parseTbankItems
+async function extractTextItems(bytes) {
+  await loadPdfJs();
+  let doc;
+  try { doc = await pdfjsLib.getDocument({ data: bytes.slice() }).promise; }
+  catch (err) { throw new Error('Не удалось прочитать PDF. Возможно, файл защищён паролем или повреждён'); }
+  const items = [];
+  for (let p = 1; p <= doc.numPages; p++) {
+    const content = await (await doc.getPage(p)).getTextContent();
+    for (const t of content.items) {
+      if (t.str && t.str.trim()) items.push({ str: t.str, x: t.transform[4], y: t.transform[5], page: p });
+    }
+  }
+  return items;
+}
 let pendingImport = null;
 function openImport() {
   pendingImport = null;

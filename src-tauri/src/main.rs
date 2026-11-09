@@ -57,7 +57,7 @@ async fn save_file(name: String, text: String) -> Result<bool, String> {
 #[tauri::command]
 async fn open_table() -> Result<Option<Table>, String> {
     let Some(handle) = rfd::AsyncFileDialog::new()
-        .add_filter("Таблицы и копии", &["xlsx", "xls", "csv", "json"])
+        .add_filter("Таблицы и копии", &["xlsx", "xls", "csv", "json", "pdf"])
         .pick_file()
         .await
     else {
